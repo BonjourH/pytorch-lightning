@@ -7,7 +7,10 @@ from torchvision import transforms
 import torch
 from PIL import Image
 from enum import IntEnum
-from base import CameraCalibration, SourceCameraId, CameraType, ObjectType, Object3D
+from base import (
+    CameraCalibration, SourceCameraId, CameraType, 
+    ObjectType, ObstacleTrajectory, Point3DAccMotion
+)
 import numpy as np
 
 
@@ -17,12 +20,12 @@ class TrainingSample:
         self.calibrations = calibrations
         self.image_paths: List[Dict[SourceCameraId, str]] = []
         self.ego_states: List[Dict] = []
-        self.objects: List[List[Object3D]] = []
+        self.objects: List[List[ObstacleTrajectory]] = []
     
     def add_frame(self, 
                  image_paths: Dict[SourceCameraId, str],
                  ego_state: Dict,
-                 objects: List[Object3D]):
+                 objects: List[ObstacleTrajectory]):
         self.image_paths.append(image_paths)
         self.ego_states.append(ego_state)
         self.objects.append(objects)
@@ -153,16 +156,31 @@ class MultiFrameDataset(Dataset):
                         assert os.path.exists(img_path), f"Image not found: {img_path}"
                         img_paths[camera_id] = img_path
                     
-                    # Convert objects to Object3D instances
+                    # Convert objects to Trajectory instances
                     objects = []
                     for obj_data in obstacle_labels[i]['obstacles']:
-                        obj = Object3D(
-                            id=obj_data['id'],
-                            type=ObjectType[obj_data['type']],
-                            position=np.array([obj_data['x'], obj_data['y'], obj_data['z']]),
-                            dimensions=np.array([obj_data['length'], obj_data['width'], obj_data['height']]),
+                        motion = Point3DAccMotion(
+                            x=obj_data['x'],
+                            y=obj_data['y'],
+                            z=obj_data['z'],
+                            vx=obj_data.get('vx', 0.0),
+                            vy=obj_data.get('vy', 0.0),
+                            vz=0.0,  # Assume no vertical velocity
+                            ax=0.0,  # Initialize with zero acceleration
+                            ay=0.0,
+                            az=0.0
+                        )
+                        
+                        obj = ObstacleTrajectory(
+                            id=int(obj_data['id']),
+                            t0=ego_states[i]['timestamp'],
+                            motion=motion,
                             yaw=obj_data['yaw'],
-                            velocity=np.array([obj_data['vx'], obj_data['vy']]) if 'vx' in obj_data else None
+                            length=obj_data['length'],
+                            width=obj_data['width'],
+                            height=obj_data['height'],
+                            object_type=ObjectType[obj_data['type']],
+                            valid=True
                         )
                         objects.append(obj)
                     
@@ -200,7 +218,7 @@ class MultiFrameDataset(Dataset):
         # Add ego states
         ret['ego_states'] = sample.ego_states
 
-        # Convert objects to tensor format
+        # Convert Trajectory objects to tensor format
         for frame_objects in sample.objects:
             frame_data = {
                 'ids': [],
@@ -208,33 +226,34 @@ class MultiFrameDataset(Dataset):
                 'positions': [],
                 'dimensions': [],
                 'yaws': [],
-                'velocities': []
+                'velocities': [],
+                'accelerations': []  # Added acceleration data
             }
             
             for obj in frame_objects:
                 frame_data['ids'].append(obj.id)
-                frame_data['types'].append(int(obj.type))
+                frame_data['types'].append(int(obj.object_type))
                 frame_data['positions'].append(obj.position)
                 frame_data['dimensions'].append(obj.dimensions)
                 frame_data['yaws'].append(obj.yaw)
-                if obj.velocity is not None:
-                    frame_data['velocities'].append(obj.velocity)
-                else:
-                    frame_data['velocities'].append(np.zeros(2))
+                frame_data['velocities'].append(obj.velocity[:2])  # Only x-y velocity
+                frame_data['accelerations'].append(obj.acceleration[:2])  # Only x-y acceleration
             
             # Convert lists to tensors
-            if frame_objects:  # Only if there are objects
+            if frame_objects:
                 frame_data['types'] = torch.tensor(frame_data['types'])
                 frame_data['positions'] = torch.tensor(np.stack(frame_data['positions']))
                 frame_data['dimensions'] = torch.tensor(np.stack(frame_data['dimensions']))
                 frame_data['yaws'] = torch.tensor(frame_data['yaws'])
                 frame_data['velocities'] = torch.tensor(np.stack(frame_data['velocities']))
-            else:  # Empty tensors if no objects
+                frame_data['accelerations'] = torch.tensor(np.stack(frame_data['accelerations']))
+            else:
                 frame_data['types'] = torch.empty(0, dtype=torch.long)
                 frame_data['positions'] = torch.empty(0, 3)
                 frame_data['dimensions'] = torch.empty(0, 3)
                 frame_data['yaws'] = torch.empty(0)
                 frame_data['velocities'] = torch.empty(0, 2)
+                frame_data['accelerations'] = torch.empty(0, 2)
                 
             ret['objects_data'].append(frame_data)
 
@@ -249,6 +268,52 @@ class MultiFrameDataset(Dataset):
             }
 
         return ret
+    
+def custom_collate_fn(batch: List[Dict]) -> Dict:
+    """Custom collate function for DataLoader."""
+    collated = {
+        'images': {},      # Dict[camera_id -> Tensor[B, T, C, H, W]]
+        'ego_states': [],  # List[B * List[Dict]]
+        'objects_data': [], # List[B * List[Dict]]
+        'calibrations': {} # Dict[camera_id -> Dict[str, Union[Tensor, CameraType]]]
+    }
+    
+    # Collate images
+    for camera_id in batch[0]['images'].keys():
+        collated['images'][camera_id] = torch.stack([b['images'][camera_id] for b in batch])
+    
+    # Collate ego states (just extend the list)
+    for b in batch:
+        collated['ego_states'].extend(b['ego_states'])
+    
+    # Collate objects data (just extend the list)
+    for b in batch:
+        collated['objects_data'].extend(b['objects_data'])
+    
+    # Collate calibrations
+    for camera_id in batch[0]['calibrations'].keys():
+        calib_dict = {}
+        first_calib = batch[0]['calibrations'][camera_id]
+             
+        # Handle non-tensor fields
+        calib_dict['camera_id'] = first_calib['camera_id']
+        calib_dict['camera_type'] = first_calib['camera_type']
+        
+        # Stack tensor fields
+        calib_dict['intrinsic'] = torch.stack([b['calibrations'][camera_id]['intrinsic'] for b in batch])
+        calib_dict['extrinsic'] = torch.stack([b['calibrations'][camera_id]['extrinsic'] for b in batch])
+        
+        # Handle distortion (might be empty)
+        distortions = [b['calibrations'][camera_id]['distortion'] for b in batch]
+        if distortions[0].numel() > 0:  # If not empty
+            calib_dict['distortion'] = torch.stack(distortions)
+        else:
+            calib_dict['distortion'] = torch.empty(0)
+            
+        collated['calibrations'][camera_id] = calib_dict
+    
+    return collated
+
 
 if __name__ == '__main__':
     # Test configuration
@@ -281,7 +346,8 @@ if __name__ == '__main__':
         dataset,
         batch_size=2,
         shuffle=True,
-        num_workers=2
+        num_workers=2,
+        collate_fn=custom_collate_fn
     )
 
     print("\n=== Testing Batch Processing ===")
@@ -289,8 +355,9 @@ if __name__ == '__main__':
         print("\nBatch contents:")
         print(f"Number of cameras: {len(batch['images'])}")
         
-        # import pdb; pdb.set_trace()
-        # print batch.keys()
+        print(batch.keys())
+        import pdb; pdb.set_trace()
+        # batch['images'][SourceCameraId.FRONT_CENTER_CAMERA].shape => torch.Size([2, 10, 3, 416, 800]
         
         print("\nImage shapes:")
         for camera_id, images in batch['images'].items():
