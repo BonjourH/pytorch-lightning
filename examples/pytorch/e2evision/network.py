@@ -3,6 +3,7 @@ import torch.nn as nn
 import torchvision.models as models
 from typing import Dict, List, Tuple
 import numpy as np
+import torch.nn.functional as F
 
 class ImageFeatureExtractor(nn.Module):
     """2D backbone for extracting image features."""
@@ -40,7 +41,7 @@ class TrajectoryNet(nn.Module):
             nn.ReLU(inplace=True),
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(inplace=True),
-            nn.Linear(hidden_dim, 7)  # [x, y, z, vx, vy, length, width, height]
+            nn.Linear(hidden_dim, 8)  # [x, y, z, vx, vy, length, width, height]
         )
 
     def project_points_to_image(self,
@@ -168,8 +169,14 @@ class TrajectoryNet(nn.Module):
         features_cat = torch.cat(all_features, dim=-1)  # [B, T, C, N*num_cameras]
         features_mean = features_cat.mean(dim=1)  # [B, C, N*num_cameras]
         
-        # Predict trajectory refinement
+        # Modify the trajectory refinement
         features_flat = features_mean.flatten(1)  # [B, C*N*num_cameras]
-        refined_params = self.trajectory_mlp(features_flat)
+        trajectory_update = self.trajectory_mlp(features_flat)
         
-        return refined_params
+        # Apply the update as a residual
+        optimized_params = trajectory_params + 0.1 * trajectory_update  # Scale the update
+        
+        # Ensure positive values for dimensions
+        optimized_params[:, 5:] = F.relu(optimized_params[:, 5:])  # length, width, height must be positive
+        
+        return optimized_params
