@@ -97,6 +97,51 @@ class TrajectoryDecoder(nn.Module):
                 num_heads=8
             ) for _ in range(num_layers)
         ])
+        
+        # Pre-compute unit cube points
+        self.unit_cube_points = self._generate_unit_cube_points()
+    
+    def _generate_unit_cube_points(self):
+        """Generate points on unit cube faces at initialization time."""
+        # Number of points per edge
+        points_per_edge = int(np.sqrt(self.num_points // 6))
+        
+        # Create unit coordinates (not including 1.0)
+        coords = torch.linspace(0, 1, points_per_edge+1)[:-1]  # [0, 1/n, 2/n, ..., (n-1)/n]
+        
+        # Generate grid points for all faces of the cube
+        xx, yy = torch.meshgrid(coords, coords, indexing='ij')
+        xx = xx.reshape(-1)  # Flatten
+        yy = yy.reshape(-1)  # Flatten
+        
+        # 6 faces of the unit cube
+        all_points = []
+        
+        # Front face (x=0)
+        all_points.append(torch.stack([torch.zeros_like(xx), xx, yy], dim=-1))
+        
+        # Back face (x=1)
+        all_points.append(torch.stack([torch.ones_like(xx), xx, yy], dim=-1))
+        
+        # Left face (y=0)
+        all_points.append(torch.stack([xx, torch.zeros_like(xx), yy], dim=-1))
+        
+        # Right face (y=1)
+        all_points.append(torch.stack([xx, torch.ones_like(xx), yy], dim=-1))
+        
+        # Bottom face (z=0)
+        all_points.append(torch.stack([xx, yy, torch.zeros_like(xx)], dim=-1))
+        
+        # Top face (z=1)
+        all_points.append(torch.stack([xx, yy, torch.ones_like(xx)], dim=-1))
+        
+        # Combine all faces
+        cube_points = torch.cat(all_points, dim=0)  # [num_points, 3]
+        
+        # Convert from unit cube [0,1] to centered unit cube [-0.5,0.5]
+        cube_points = cube_points - 0.5
+        
+        return cube_points
     
     def predict_trajectory_parameters(self, queries: torch.Tensor) -> Dict[str, torch.Tensor]:
         """Predict trajectory parameters from query embeddings.
@@ -253,133 +298,50 @@ class TrajectoryDecoder(nn.Module):
         
         return trajectories
     
-    def sample_box_points(self, traj_params: torch.Tensor) -> torch.Tensor:
-        """Sample points on 3D bounding box faces.
+    def sample_box_points(self, motion_params: torch.Tensor) -> torch.Tensor:
+        """Sample points on 3D bounding box in object's local coordinate system.
         
         Args:
-            traj_params: Tensor[B, N, num_params]
+            motion_params: Tensor[B, N, TrajParamIndex.END_OF_INDEX]
+                B: batch size
+                N: number of queries
             
         Returns:
-            Tensor[B, N, num_points, 3] - 3D points
+            Tensor[B, N, num_points, 3]: Points on box surfaces in object local coordinates
         """
-        B, N = traj_params.shape[:2]
-        device = traj_params.device
+        B, N = motion_params.shape[:2]
+        device = motion_params.device
         
-        # Extract box dimensions
-        center_x = traj_params[..., TrajParamIndex.X]
-        center_y = traj_params[..., TrajParamIndex.Y]
-        center_z = traj_params[..., TrajParamIndex.Z]
-        length = traj_params[..., TrajParamIndex.LENGTH]
-        width = traj_params[..., TrajParamIndex.WIDTH]
-        height = traj_params[..., TrajParamIndex.HEIGHT]
-        yaw = traj_params[..., TrajParamIndex.YAW]
+        # Get dimensions
+        length = motion_params[..., TrajParamIndex.LENGTH].unsqueeze(-1)  # [B, N, 1]
+        width = motion_params[..., TrajParamIndex.WIDTH].unsqueeze(-1)    # [B, N, 1]
+        height = motion_params[..., TrajParamIndex.HEIGHT].unsqueeze(-1)  # [B, N, 1]
         
-        # Create sampling grid for each face (4 points per face, 6 faces)
-        points_per_face = self.num_points // 6
+        # Scale unit cube points by dimensions
+        # unit_cube_points: [num_points, 3]
+        # dims: [B, N, 3]
+        dims = torch.stack([length, width, height], dim=-1)  # [B, N, 3]
         
-        # Sample relative coordinates (-0.5 to 0.5)
-        offsets = torch.linspace(-0.4, 0.4, points_per_face, device=device)
+        # Get unit cube points
+        unit_points = self.unit_cube_points.to(device)  # [num_points, 3]
         
-        # Generate points for each face
-        all_points = []
-        
-        # Front face (x = -l/2)
-        for i in range(points_per_face):
-            for j in range(points_per_face):
-                point = torch.stack([
-                    torch.full_like(center_x, -0.5),  # x = -l/2
-                    offsets[i].expand_like(center_y),  # y varies
-                    offsets[j].expand_like(center_z)   # z varies
-                ], dim=-1)
-                all_points.append(point)
-        
-        # Back face (x = l/2)
-        for i in range(points_per_face):
-            for j in range(points_per_face):
-                point = torch.stack([
-                    torch.full_like(center_x, 0.5),   # x = l/2
-                    offsets[i].expand_like(center_y),  # y varies
-                    offsets[j].expand_like(center_z)   # z varies
-                ], dim=-1)
-                all_points.append(point)
-        
-        # Left face (y = -w/2)
-        for i in range(points_per_face):
-            for j in range(points_per_face):
-                point = torch.stack([
-                    offsets[i].expand_like(center_x),  # x varies
-                    torch.full_like(center_y, -0.5),   # y = -w/2
-                    offsets[j].expand_like(center_z)   # z varies
-                ], dim=-1)
-                all_points.append(point)
-        
-        # Right face (y = w/2)
-        for i in range(points_per_face):
-            for j in range(points_per_face):
-                point = torch.stack([
-                    offsets[i].expand_like(center_x),  # x varies
-                    torch.full_like(center_y, 0.5),    # y = w/2
-                    offsets[j].expand_like(center_z)   # z varies
-                ], dim=-1)
-                all_points.append(point)
-        
-        # Bottom face (z = -h/2)
-        for i in range(points_per_face):
-            for j in range(points_per_face):
-                point = torch.stack([
-                    offsets[i].expand_like(center_x),  # x varies
-                    offsets[j].expand_like(center_y),  # y varies
-                    torch.full_like(center_z, -0.5)    # z = -h/2
-                ], dim=-1)
-                all_points.append(point)
-        
-        # Top face (z = h/2)
-        for i in range(points_per_face):
-            for j in range(points_per_face):
-                point = torch.stack([
-                    offsets[i].expand_like(center_x),  # x varies
-                    offsets[j].expand_like(center_y),  # y varies
-                    torch.full_like(center_z, 0.5)     # z = h/2
-                ], dim=-1)
-                all_points.append(point)
-        
-        # Stack all points
-        box_points = torch.stack(all_points, dim=2)  # [B, N, num_points, 3]
-        
-        # Scale by box dimensions
-        box_points[..., 0] *= length.unsqueeze(-1)
-        box_points[..., 1] *= width.unsqueeze(-1)
-        box_points[..., 2] *= height.unsqueeze(-1)
-        
-        # Apply rotation
-        cos_yaw = torch.cos(yaw).unsqueeze(-1)
-        sin_yaw = torch.sin(yaw).unsqueeze(-1)
-        
-        x_rotated = box_points[..., 0] * cos_yaw - box_points[..., 1] * sin_yaw
-        y_rotated = box_points[..., 0] * sin_yaw + box_points[..., 1] * cos_yaw
-        
-        box_points[..., 0] = x_rotated
-        box_points[..., 1] = y_rotated
-        
-        # Translate to center
-        box_points[..., 0] += center_x.unsqueeze(-1)
-        box_points[..., 1] += center_y.unsqueeze(-1)
-        box_points[..., 2] += center_z.unsqueeze(-1)
+        # Scale points by dimensions
+        box_points = unit_points.unsqueeze(0).unsqueeze(0) * dims.unsqueeze(2)  # [B, N, num_points, 3]
         
         return box_points
     
-    def gather_point_features(self,
-                            box_points: torch.Tensor,
+    def gather_point_features(self, 
+                            box_points: torch.Tensor, 
                             features_dict: Dict[SourceCameraId, torch.Tensor],
                             calibrations: Dict[SourceCameraId, Dict],
                             ego_states: torch.Tensor) -> torch.Tensor:
-        """Gather features for 3D points from all cameras and frames.
+        """Gather features for box points from all cameras and frames.
         
         Args:
-            box_points: Tensor[B, N, num_points, 3]
+            box_points: Tensor[B, N, num_points, 3]: Points in object local coordinates
             features_dict: Dict[camera_id -> Tensor[B, T, C, H, W]]
             calibrations: Dict[camera_id -> calibration_dict]
-            ego_states: Tensor[B, T, 5]
+            ego_states: Tensor[B, T, 5] position, yaw, timestamp
             
         Returns:
             Tensor[B, N, num_points, T, num_cameras, C]
@@ -387,50 +349,114 @@ class TrajectoryDecoder(nn.Module):
         B, N, P = box_points.shape[:3]
         T = next(iter(features_dict.values())).shape[1]
         C = next(iter(features_dict.values())).shape[2]
+        device = box_points.device
         num_cameras = len(features_dict)
         
-        # Initialize output tensor
-        point_features = []
+        # Store motion parameters for calculations
+        params = self.motion_params
         
-        # Process each camera view
-        for camera_idx, (camera_id, features) in enumerate(features_dict.items()):
-            camera_features = []
+        # Initialize output tensor to store all features
+        all_features = torch.zeros(B, N, P, T, num_cameras, C, device=device)
+        
+        # For each time step
+        for t in range(T):
+            # 1. Calculate object positions at time t
+            dt = ego_states[:, t, 4] - ego_states[:, -1, 4]  # Time diff from reference frame
+            dt = dt.unsqueeze(-1).unsqueeze(-1)  # [B, 1, 1]
             
-            # For each time step
-            for t in range(T):
-                # Transform points to ego frame at time t
-                t_points = self.transform_points_to_ego_frame(
-                    box_points, ego_states[:, t]
-                )  # [B, N, P, 3]
+            # Calculate new center position using motion model (constant acceleration)
+            # x(t) = x0 + v0*t + 0.5*a*t^2
+            pos_x = params[..., TrajParamIndex.X].unsqueeze(-1) + \
+                   params[..., TrajParamIndex.VX].unsqueeze(-1) * dt + \
+                   0.5 * params[..., TrajParamIndex.AX].unsqueeze(-1) * dt * dt
+                   
+            pos_y = params[..., TrajParamIndex.Y].unsqueeze(-1) + \
+                   params[..., TrajParamIndex.VY].unsqueeze(-1) * dt + \
+                   0.5 * params[..., TrajParamIndex.AY].unsqueeze(-1) * dt * dt
+                   
+            pos_z = params[..., TrajParamIndex.Z].unsqueeze(-1)  # Assume constant z
+            
+            # Calculate velocity at time t
+            # v(t) = v0 + a*t
+            vel_x = params[..., TrajParamIndex.VX].unsqueeze(-1) + \
+                   params[..., TrajParamIndex.AX].unsqueeze(-1) * dt
+                   
+            vel_y = params[..., TrajParamIndex.VY].unsqueeze(-1) + \
+                   params[..., TrajParamIndex.AY].unsqueeze(-1) * dt
+            
+            # 2. Determine object orientation
+            # Use velocity direction if speed is above threshold, otherwise use predicted yaw
+            speed = torch.sqrt(vel_x*vel_x + vel_y*vel_y)
+            base_yaw = params[..., TrajParamIndex.YAW].unsqueeze(-1)
+            
+            # Calculate yaw from velocity when speed is sufficient
+            vel_yaw = torch.atan2(vel_y, vel_x)
+            
+            # Select yaw based on speed
+            threshold = 0.1
+            yaw = torch.where(speed > threshold, vel_yaw, base_yaw)
+            
+            # 3. Apply local-to-global transform to box points
+            # Rotation matrix (2D rotation around z-axis)
+            cos_yaw = torch.cos(yaw)
+            sin_yaw = torch.sin(yaw)
+            
+            # Apply rotation to all points
+            local_points = box_points.clone()  # [B, N, P, 3]
+            
+            # Rotate points
+            rotated_x = local_points[..., 0] * cos_yaw - local_points[..., 1] * sin_yaw
+            rotated_y = local_points[..., 0] * sin_yaw + local_points[..., 1] * cos_yaw
+            rotated_z = local_points[..., 2]
+            
+            # Concatenate rotated coordinates
+            rotated_points = torch.stack([rotated_x, rotated_y, rotated_z], dim=-1)
+            
+            # Translate to object center
+            global_center = torch.cat([pos_x, pos_y, pos_z], dim=-1)  # [B, N, 3]
+            global_points = rotated_points + global_center.unsqueeze(2)  # [B, N, P, 3]
+            
+            # 4. Transform to ego coordinate system at time t
+            ego_points = self.transform_points_to_ego_frame(
+                global_points, ego_states[:, t]
+            )  # [B, N, P, 3]
+            
+            # 5. Project points to each camera and sample features
+            for camera_idx, (camera_id, features) in enumerate(features_dict.items()):
+                # Get camera features for this timestep
+                features_t = features[:, t]  # [B, C, H, W]
+                feature_H, feature_W = features_t.shape[2:4]
                 
-                # Project to camera view
+                # Project points to camera view
+                calib = calibrations[camera_id]
+                img_width = calib.get('image_width', feature_W) 
+                img_height = calib.get('image_height', feature_H)
+                
+                # Project 3D points to image coordinates (already normalized 0-1)
                 points_2d = self.project_points_to_image(
-                    t_points.reshape(B*N*P, 3),
-                    calibrations[camera_id]['intrinsic'],
-                    calibrations[camera_id]['extrinsic']
-                )  # [B*N*P, 2]
+                    ego_points.reshape(B*N*P, 3),
+                    calib['intrinsic'],
+                    calib['extrinsic'],
+                    (img_width, img_height)
+                )  # [B*N*P, 2] - now in 0-1 normalized coordinates
                 
-                # Sample features
-                H, W = features.shape[3:5]
-                
-                # Normalize to [-1, 1] for grid_sample
-                points_2d[..., 0] = 2 * points_2d[..., 0] / W - 1
-                points_2d[..., 1] = 2 * points_2d[..., 1] / H - 1
+                # Convert from 0-1 to [-1, 1] directly for grid_sample
+                points_2d[:, 0] = 2 * points_2d[:, 0] - 1
+                points_2d[:, 1] = 2 * points_2d[:, 1] - 1
                 
                 # Check if points are in image bounds
                 valid_mask = (
-                    (points_2d[..., 0] >= -1) & (points_2d[..., 0] <= 1) &
-                    (points_2d[..., 1] >= -1) & (points_2d[..., 1] <= 1)
+                    (points_2d[:, 0] >= -1) & (points_2d[:, 0] <= 1) &
+                    (points_2d[:, 1] >= -1) & (points_2d[:, 1] <= 1)
                 ).float().reshape(B, N, P, 1)
                 
                 # Clamp values to prevent sampling outside
                 points_2d = torch.clamp(points_2d, -1, 1)
                 
                 # Sample features
-                features_t = features[:, t]  # [B, C, H, W]
                 sampled_feats = F.grid_sample(
                     features_t,
-                    points_2d.reshape(B, -1, 1, 2).to(features_t.device),
+                    points_2d.reshape(B, -1, 1, 2),
                     mode='bilinear',
                     align_corners=False
                 )  # [B, C, N*P, 1]
@@ -439,16 +465,10 @@ class TrajectoryDecoder(nn.Module):
                 sampled_feats = sampled_feats.reshape(B, C, N, P).permute(0, 2, 3, 1)  # [B, N, P, C]
                 sampled_feats = sampled_feats * valid_mask
                 
-                camera_features.append(sampled_feats)
-            
-            # Stack features for this camera
-            camera_features = torch.stack(camera_features, dim=3)  # [B, N, P, T, C]
-            point_features.append(camera_features)
+                # Store in output tensor
+                all_features[:, :, :, t, camera_idx] = sampled_feats
         
-        # Stack all camera features
-        point_features = torch.stack(point_features, dim=4)  # [B, N, P, T, num_cameras, C]
-        
-        return point_features
+        return all_features
     
     def transform_points_to_ego_frame(self, 
                                     points: torch.Tensor,
@@ -509,6 +529,49 @@ class TrajectoryDecoder(nn.Module):
         
         return processed_features
 
+    def project_points_to_image(self, 
+                         points_3d: torch.Tensor, 
+                         intrinsic: torch.Tensor, 
+                         extrinsic: torch.Tensor,
+                         image_size: Tuple[int, int]) -> torch.Tensor:
+        """Project 3D points to image coordinates and normalize to image dimensions.
+        
+        Args:
+            points_3d: Tensor[N, 3] - 3D points in ego coordinate system
+            intrinsic: Tensor[3, 3] - Camera intrinsic matrix
+            extrinsic: Tensor[4, 4] - Camera extrinsic matrix (ego to camera)
+            image_size: Tuple(width, height) - Original image dimensions
+            
+        Returns:
+            Tensor[N, 2] - 2D pixel coordinates normalized by image dimensions (0 to 1)
+        """
+        device = points_3d.device
+        img_width, img_height = image_size
+        
+        # Transform points from ego to camera coordinate system
+        points_hom = torch.cat([points_3d, torch.ones(points_3d.shape[0], 1, device=device)], dim=1)  # [N, 4]
+        points_cam = torch.matmul(points_hom, extrinsic.T)[:, :3]  # [N, 3]
+        
+        # Project to image plane
+        points_2d_hom = torch.matmul(points_cam, intrinsic.T)  # [N, 3]
+        
+        # Normalize by Z coordinate (depth)
+        # Handle division by zero
+        z = points_2d_hom[:, 2:3]
+        z = torch.where(z == 0, torch.ones_like(z) * 1e-10, z)
+        points_2d = points_2d_hom[:, :2] / z
+        
+        # Points behind the camera get invalid coordinates
+        behind_camera = (points_cam[:, 2] <= 0)
+        
+        # Normalize by image dimensions (0 to 1 scale)
+        points_2d[:, 0] = points_2d[:, 0] / img_width
+        points_2d[:, 1] = points_2d[:, 1] / img_height
+        
+        # Mark behind-camera points as invalid
+        points_2d[behind_camera] = -2.0  # Outside of normalized range
+        
+        return points_2d
 
 class TrajectoryRefinementLayer(nn.Module):
     """Layer for refining trajectory queries."""
