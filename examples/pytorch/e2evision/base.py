@@ -5,6 +5,14 @@ from dataclasses import dataclass
 import numpy as np
 
 
+class AttributeType(IntEnum):
+    """Attribute type enumeration."""
+    HAS_OBJECT = 0
+    STATIC = 1
+    OCCLUDED = 2
+    END_OF_INDEX = 3
+
+
 class ObjectType(IntEnum):
     """Object type enumeration."""
     UNKNOWN = 0
@@ -97,8 +105,7 @@ class TrajParamIndex(IntEnum):
     LENGTH = 8      # dimensions
     WIDTH = 9
     HEIGHT = 10
-    TYPE = 11       # object type
-    END_OF_INDEX = 12
+    END_OF_INDEX = 11
 
     def __str__(self):
         return self.name
