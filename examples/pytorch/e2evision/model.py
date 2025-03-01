@@ -534,11 +534,11 @@ class TrajectoryDecoder(nn.Module):
                          intrinsic: torch.Tensor, 
                          extrinsic: torch.Tensor,
                          image_size: Tuple[int, int]) -> torch.Tensor:
-        """Project 3D points to image coordinates and normalize to image dimensions.
+        """Project 3D points to image coordinates considering different camera types.
         
         Args:
             points_3d: Tensor[N, 3] - 3D points in ego coordinate system
-            intrinsic: Tensor[3, 3] - Camera intrinsic matrix
+            intrinsic: Tensor[CameraIntrinsicIndex.END_OF_INDEX] - Camera intrinsic parameters
             extrinsic: Tensor[4, 4] - Camera extrinsic matrix (ego to camera)
             image_size: Tuple(width, height) - Original image dimensions
             
@@ -546,27 +546,100 @@ class TrajectoryDecoder(nn.Module):
             Tensor[N, 2] - 2D pixel coordinates normalized by image dimensions (0 to 1)
         """
         device = points_3d.device
-        img_width, img_height = image_size
+        
+        # Extract camera parameters from intrinsic vector
+        camera_type = int(intrinsic[CameraIntrinsicIndex.CAMERA_TYPE].item())
+        img_width = intrinsic[CameraIntrinsicIndex.IMAGE_WIDTH].item()
+        img_height = intrinsic[CameraIntrinsicIndex.IMAGE_HEIGHT].item()
+        fx = intrinsic[CameraIntrinsicIndex.FX]
+        fy = intrinsic[CameraIntrinsicIndex.FY]
+        cx = intrinsic[CameraIntrinsicIndex.CX]
+        cy = intrinsic[CameraIntrinsicIndex.CY]
+        
+        # Distortion parameters
+        k1 = intrinsic[CameraIntrinsicIndex.K1]
+        k2 = intrinsic[CameraIntrinsicIndex.K2]
+        k3 = intrinsic[CameraIntrinsicIndex.K3]
+        k4 = intrinsic[CameraIntrinsicIndex.K4]
+        p1 = intrinsic[CameraIntrinsicIndex.P1]
+        p2 = intrinsic[CameraIntrinsicIndex.P2]
         
         # Transform points from ego to camera coordinate system
         points_hom = torch.cat([points_3d, torch.ones(points_3d.shape[0], 1, device=device)], dim=1)  # [N, 4]
         points_cam = torch.matmul(points_hom, extrinsic.T)[:, :3]  # [N, 3]
         
-        # Project to image plane
-        points_2d_hom = torch.matmul(points_cam, intrinsic.T)  # [N, 3]
-        
-        # Normalize by Z coordinate (depth)
-        # Handle division by zero
-        z = points_2d_hom[:, 2:3]
-        z = torch.where(z == 0, torch.ones_like(z) * 1e-10, z)
-        points_2d = points_2d_hom[:, :2] / z
-        
-        # Points behind the camera get invalid coordinates
+        # Points behind the camera
         behind_camera = (points_cam[:, 2] <= 0)
         
-        # Normalize by image dimensions (0 to 1 scale)
-        points_2d[:, 0] = points_2d[:, 0] / img_width
-        points_2d[:, 1] = points_2d[:, 1] / img_height
+        # Normalized coordinates (x/z, y/z)
+        # Handle division by zero
+        z = points_cam[:, 2:3]
+        z = torch.where(z == 0, torch.ones_like(z) * 1e-10, z)
+        x_normalized = points_cam[:, 0:1] / z
+        y_normalized = points_cam[:, 1:2] / z
+        
+        # Apply different camera models based on camera type
+        if camera_type == CameraType.PINHOLE:
+            # Ideal pinhole camera model without distortion
+            x_distorted = x_normalized
+            y_distorted = y_normalized
+            
+        elif camera_type == CameraType.GENERAL_DISTORT:
+            # Standard pinhole camera model with radial and tangential distortion
+            r2 = x_normalized * x_normalized + y_normalized * y_normalized
+            r4 = r2 * r2
+            r6 = r4 * r2
+            
+            # Radial distortion
+            radial = 1.0 + k1 * r2 + k2 * r4 + k3 * r6
+            
+            # Tangential distortion
+            dx_tangential = 2 * p1 * x_normalized * y_normalized + p2 * (r2 + 2 * x_normalized * x_normalized)
+            dy_tangential = p1 * (r2 + 2 * y_normalized * y_normalized) + 2 * p2 * x_normalized * y_normalized
+            
+            # Apply distortion
+            x_distorted = x_normalized * radial + dx_tangential
+            y_distorted = y_normalized * radial + dy_tangential
+            
+        elif camera_type == CameraType.FISHEYE:
+            # Fisheye camera model
+            r = torch.sqrt(x_normalized * x_normalized + y_normalized * y_normalized)
+            
+            # Handle zero radius
+            r = torch.where(r == 0, torch.ones_like(r) * 1e-10, r)
+            
+            # Compute theta (angle from optical axis)
+            theta = torch.atan(r)
+            theta2 = theta * theta
+            theta4 = theta2 * theta2
+            theta6 = theta4 * theta2
+            theta8 = theta4 * theta4
+            
+            # Apply distortion model
+            theta_d = theta * (1 + k1 * theta2 + k2 * theta4 + k3 * theta6 + k4 * theta8)
+            
+            # Scale factors
+            scaling = torch.where(r > 0, theta_d / r, torch.ones_like(r))
+            
+            # Apply scaling
+            x_distorted = x_normalized * scaling
+            y_distorted = y_normalized * scaling
+            
+        else:
+            # Default to pinhole without distortion
+            x_distorted = x_normalized
+            y_distorted = y_normalized
+        
+        # Apply camera matrix
+        x_pixel = fx * x_distorted + cx
+        y_pixel = fy * y_distorted + cy
+        
+        # Normalize to [0, 1]
+        x_norm = x_pixel / img_width
+        y_norm = y_pixel / img_height
+        
+        # Combine coordinates
+        points_2d = torch.cat([x_norm, y_norm], dim=1)
         
         # Mark behind-camera points as invalid
         points_2d[behind_camera] = -2.0  # Outside of normalized range

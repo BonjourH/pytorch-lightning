@@ -83,6 +83,23 @@ class CameraType(IntEnum):
         return self.value
 
 
+class CameraIntrinsicIndex(IntEnum):
+    CAMERA_TYPE = 0
+    IMAGE_WIDTH = 1
+    IMAGE_HEIGHT = 2
+    FX = 3
+    FY = 4
+    CX = 5
+    CY = 6
+    K1 = 7
+    K2 = 8
+    K3 = 9
+    K4 = 10
+    P1 = 11
+    P2 = 12
+    END_OF_INDEX = 13
+
+
 @dataclass
 class CameraCalibration:
     camera_id: Optional[SourceCameraId] = None

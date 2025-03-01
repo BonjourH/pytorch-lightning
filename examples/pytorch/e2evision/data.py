@@ -9,7 +9,8 @@ from PIL import Image
 from enum import IntEnum
 from base import (
     CameraCalibration, SourceCameraId, CameraType, 
-    ObjectType, ObstacleTrajectory, Point3DAccMotion
+    ObjectType, ObstacleTrajectory, Point3DAccMotion,
+    TrajParamIndex, AttributeType, CameraIntrinsicIndex
 )
 import numpy as np
 

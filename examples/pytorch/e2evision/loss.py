@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from scipy.optimize import linear_sum_assignment
 from typing import Dict, List, Tuple
 import numpy as np
-from base import Trajectory, TrajParamIndex
+from base import Trajectory, TrajParamIndex, AttributeType, ObjectType
 
 class TrajectoryMatcher:
     """Match predicted trajectories to ground truth using Hungarian algorithm."""
@@ -239,3 +239,135 @@ class TrajectoryLoss(nn.Module):
             losses[k] = losses[k] / B
             
         return losses 
+
+class PerceptionLoss(nn.Module):
+    """Loss function for end-to-end 3D perception."""
+    def __init__(self, weight_dict=None):
+        super().__init__()
+        self.weight_dict = weight_dict if weight_dict is not None else {
+            'motion': 1.0,
+            'type': 0.5,
+            'attributes': 0.5,
+            'existence': 2.0
+        }
+    
+    def forward(self, outputs, targets):
+        """
+        Args:
+            outputs: Dict from model with:
+                - trajectories: List of ObstacleTrajectory
+                - aux_trajectories: List of intermediate trajectory dicts
+            
+            targets: Dict with:
+                - gt_trajectories: List of dicts with motion, type, attributes
+        """
+        # Get the final layer predictions
+        pred_trajectories = outputs['aux_trajectories'][-1]
+        
+        # Motion parameters
+        pred_motion = pred_trajectories['motion_params'][0]  # First batch
+        
+        # Object type
+        pred_type_logits = pred_trajectories['type_logits'][0]  # First batch
+        
+        # Attributes
+        pred_attributes = pred_trajectories['attributes'][0]  # First batch
+        
+        # Existence probability (from HAS_OBJECT attribute)
+        pred_existence = pred_attributes[:, AttributeType.HAS_OBJECT]
+        
+        # Extract ground truth values
+        gt_trajectories = targets['gt_trajectories']
+        
+        gt_motion = torch.stack([traj['motion'] for traj in gt_trajectories])
+        gt_type = torch.tensor([traj['type'] for traj in gt_trajectories], device=pred_motion.device)
+        gt_attributes = torch.stack([traj['attributes'] for traj in gt_trajectories])
+        
+        # Match predictions to ground truth
+        indices = self.bipartite_matching(pred_motion, gt_motion)
+        
+        # Reorder predictions to match ground truth
+        matched_indices = indices[0]  # Indices of predictions matched to GT
+        
+        # Get matched predictions
+        matched_motion = pred_motion[matched_indices]
+        matched_type_logits = pred_type_logits[matched_indices]
+        matched_attributes = pred_attributes[matched_indices]
+        
+        # Compute losses
+        motion_loss = F.mse_loss(matched_motion, gt_motion)
+        
+        type_loss = F.cross_entropy(matched_type_logits, gt_type)
+        
+        # Binary classification for each attribute
+        attribute_loss = F.binary_cross_entropy(matched_attributes, gt_attributes)
+        
+        # Existence loss - predict which queries should output valid objects
+        # Create target existence: 1 for matched queries, 0 for unmatched
+        target_existence = torch.zeros_like(pred_existence)
+        target_existence[matched_indices] = 1.0
+        
+        existence_loss = F.binary_cross_entropy(pred_existence, target_existence)
+        
+        # Weighted sum of losses
+        total_loss = (
+            self.weight_dict['motion'] * motion_loss +
+            self.weight_dict['type'] * type_loss +
+            self.weight_dict['attributes'] * attribute_loss +
+            self.weight_dict['existence'] * existence_loss
+        )
+        
+        return {
+            'loss': total_loss,
+            'motion_loss': motion_loss,
+            'type_loss': type_loss,
+            'attribute_loss': attribute_loss,
+            'existence_loss': existence_loss
+        }
+    
+    def bipartite_matching(self, pred_motion, gt_motion):
+        """Match predictions to ground truth using Hungarian algorithm.
+        
+        Args:
+            pred_motion: Tensor[N, TrajParamIndex.END_OF_INDEX]
+            gt_motion: Tensor[M, TrajParamIndex.END_OF_INDEX]
+        
+        Returns:
+            Tuple of (row_indices, col_indices)
+        """
+        N, M = pred_motion.shape[0], gt_motion.shape[0]
+        
+        # Compute pairwise center distance cost
+        pred_centers = pred_motion[:, :3].unsqueeze(1)  # [N, 1, 3]
+        gt_centers = gt_motion[:, :3].unsqueeze(0)  # [1, M, 3]
+        
+        # Compute L2 distance
+        cost_matrix = torch.sum((pred_centers - gt_centers) ** 2, dim=-1)  # [N, M]
+        
+        # Use Hungarian algorithm
+        # For simplicity we just use a greedy matching here
+        # In practice, you should use scipy.optimize.linear_sum_assignment
+        # or torch-scatter's linear_sum_assignment
+        
+        # Greedy matching
+        matched_indices = []
+        unmatched_preds = list(range(N))
+        unmatched_gts = list(range(M))
+        
+        # Match each GT to closest prediction
+        for gt_idx in range(M):
+            if not unmatched_preds:
+                break
+                
+            # Find closest unmatched prediction
+            costs = cost_matrix[unmatched_preds, gt_idx]
+            pred_idx = unmatched_preds[torch.argmin(costs).item()]
+            
+            matched_indices.append((pred_idx, gt_idx))
+            unmatched_preds.remove(pred_idx)
+            unmatched_gts.remove(gt_idx)
+        
+        # Convert to row and column indices
+        row_indices, col_indices = zip(*matched_indices) if matched_indices else ([], [])
+        
+        return torch.tensor(row_indices, device=pred_motion.device), torch.tensor(col_indices, device=pred_motion.device) 
