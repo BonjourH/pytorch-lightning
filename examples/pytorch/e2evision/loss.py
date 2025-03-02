@@ -2,9 +2,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from scipy.optimize import linear_sum_assignment
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 import numpy as np
-from base import Trajectory, TrajParamIndex, AttributeType, ObjectType
+from base import (
+    TrajParamIndex, AttributeType, ObjectType,
+    ObstacleTrajectory, Point3DAccMotion
+)
 
 class TrajectoryMatcher:
     """Match predicted trajectories to ground truth using Hungarian algorithm."""
@@ -18,44 +21,53 @@ class TrajectoryMatcher:
         }
     
     def __call__(self, 
-                 pred_trajs: List[Trajectory],
-                 gt_trajs: List[Trajectory],
-                 timestamp: float) -> Tuple[List[Tuple[int, int]], torch.Tensor]:
-        """Match predicted trajectories to ground truth."""
-        N = len(pred_trajs)
-        M = len(gt_trajs)
-        device = next(iter(pred_trajs[0].__dict__.values())).device
+                 pred_trajs: torch.Tensor,
+                 gt_trajs: torch.Tensor) -> Tuple[List[Tuple[int, int]], torch.Tensor]:
+        """Match predicted trajectories to ground truth.
+        
+        Args:
+            pred_trajs: Tensor[N, TrajParamIndex.END_OF_INDEX] - Predicted trajectories
+            gt_trajs: Tensor[M, TrajParamIndex.END_OF_INDEX] - Ground truth trajectories
+            
+        Returns:
+            Tuple containing:
+            - List of (pred_idx, gt_idx) pairs
+            - Cost matrix used for matching
+        """
+        N, M = pred_trajs.shape[0], gt_trajs.shape[0]
+        device = pred_trajs.device
+        
+        if N == 0 or M == 0:
+            return [], torch.zeros(0, 0, device=device)
         
         cost_matrix = torch.zeros(N, M, device=device)
         
-        for i, pred in enumerate(pred_trajs):
-            for j, gt in enumerate(gt_trajs):
-                # Center position cost
-                pred_center = torch.from_numpy(pred.center(timestamp))
-                gt_center = torch.from_numpy(gt.center(timestamp))
-                center_cost = torch.norm(pred_center - gt_center, p=1)
+        for i in range(N):
+            for j in range(M):
+                pred = pred_trajs[i]
+                gt = gt_trajs[j]
                 
-                # Velocity cost
-                pred_vel = torch.from_numpy(pred.velocity_at(timestamp))
-                gt_vel = torch.from_numpy(gt.velocity_at(timestamp))
-                vel_cost = torch.norm(pred_vel - gt_vel, p=1)
+                # Center position cost (L1 norm)
+                center_cost = torch.abs(pred[TrajParamIndex.X:TrajParamIndex.Z+1] - 
+                                        gt[TrajParamIndex.X:TrajParamIndex.Z+1]).sum()
                 
-                # Acceleration cost
-                acc_cost = torch.norm(
-                    torch.from_numpy(pred.acceleration - gt.acceleration),
-                    p=1
-                )
+                # Velocity cost (L1 norm)
+                vel_cost = torch.abs(pred[TrajParamIndex.VX:TrajParamIndex.VY+1] - 
+                                     gt[TrajParamIndex.VX:TrajParamIndex.VY+1]).sum()
                 
-                # Yaw cost
-                yaw_diff = abs(pred.yaw_at(timestamp) - gt.yaw_at(timestamp))
-                yaw_cost = min(yaw_diff, 2*np.pi - yaw_diff)
+                # Acceleration cost (L1 norm)
+                acc_cost = torch.abs(pred[TrajParamIndex.AX:TrajParamIndex.AY+1] - 
+                                    gt[TrajParamIndex.AX:TrajParamIndex.AY+1]).sum()
                 
-                # Size cost
-                size_cost = torch.norm(
-                    torch.from_numpy(pred.dimensions - gt.dimensions),
-                    p=1
-                )
+                # Yaw cost (circular)
+                yaw_diff = torch.abs(pred[TrajParamIndex.YAW] - gt[TrajParamIndex.YAW])
+                yaw_cost = torch.min(yaw_diff, 2*torch.pi - yaw_diff)
                 
+                # Size cost (L1 norm)
+                size_cost = torch.abs(pred[TrajParamIndex.LENGTH:TrajParamIndex.HEIGHT+1] - 
+                                     gt[TrajParamIndex.LENGTH:TrajParamIndex.HEIGHT+1]).sum()
+                
+                # Weighted sum
                 cost_matrix[i, j] = (
                     self.cost_weights['center'] * center_cost +
                     self.cost_weights['velocity'] * vel_cost +
@@ -83,162 +95,284 @@ class TrajectoryLoss(nn.Module):
         Compute loss between predicted and ground truth trajectories.
         Args:
             outputs: Dict containing:
-                - trajectories: [B, N, 9] final predictions
-                - aux_trajectories: List[[B, N, 9]] auxiliary predictions
+                - predicted_trajs: Tensor[B, N, TrajParamIndex.END_OF_INDEX] - final predictions
+                - aux_trajs: List[Tensor[B, N, TrajParamIndex.END_OF_INDEX]] - auxiliary predictions
             targets: Dict containing:
-                - trajectories: [B, M, 9] ground truth
-                - valid: [B, M] valid mask
+                - gt_trajs: Tensor[B, M, TrajParamIndex.END_OF_INDEX] - ground truth
+                - gt_valid: Tensor[B, M] - valid mask for ground truth
         Returns:
             Dict of losses
         """
-        pred_trajs = outputs['trajectories']
-        gt_trajs = targets['trajectories']
-        gt_valid = targets['valid']
+        pred_trajs = outputs['predicted_trajs']  # [B, N, TrajParamIndex.END_OF_INDEX]
+        gt_trajs = targets['gt_trajs']  # [B, M, TrajParamIndex.END_OF_INDEX]
+        gt_valid = targets.get('gt_valid')  # [B, M]
         
-        # Match predictions to ground truth
-        indices, cost_matrix = self.matcher(pred_trajs, gt_trajs, 0.0)
+        B = pred_trajs.shape[0]
+        device = pred_trajs.device
         
         # Initialize losses
         losses = {
-            'center': 0.0,
-            'velocity': 0.0,
-            'acceleration': 0.0,
-            'yaw': 0.0,
-            'size': 0.0
+            'center': torch.tensor(0.0, device=device),
+            'velocity': torch.tensor(0.0, device=device),
+            'acceleration': torch.tensor(0.0, device=device),
+            'yaw': torch.tensor(0.0, device=device),
+            'size': torch.tensor(0.0, device=device),
+            'object_type': torch.tensor(0.0, device=device),
+            'attributes': torch.tensor(0.0, device=device)
         }
         
-        # Compute losses for each batch
-        B = len(indices)
-        for b, b_indices in enumerate(indices):
-            if len(b_indices) == 0:  # No matches in this batch
-                continue
-                
-            pred_idx = b_indices[:, 0]
-            gt_idx = b_indices[:, 1]
+        # Filter valid ground truth for each batch and compute losses
+        for b in range(B):
+            # Get batch predictions
+            b_pred = pred_trajs[b]  # [N, TrajParamIndex.END_OF_INDEX]
             
-            # Get matched pairs
-            pred_matched = pred_trajs[b, pred_idx]
-            gt_matched = gt_trajs[b, gt_idx]
+            # Filter valid predictions (those with HAS_OBJECT > 0.5)
+            pred_valid = b_pred[:, TrajParamIndex.HAS_OBJECT] > 0.5
+            b_pred_valid = b_pred[pred_valid]  # [valid_N, TrajParamIndex.END_OF_INDEX]
+            
+            # Get batch ground truth
+            b_gt = gt_trajs[b]  # [M, TrajParamIndex.END_OF_INDEX]
+            
+            # Filter valid ground truth if gt_valid is provided
+            if gt_valid is not None:
+                b_gt_valid = b_gt[gt_valid[b]]  # [valid_M, TrajParamIndex.END_OF_INDEX]
+            else:
+                # Otherwise use HAS_OBJECT flag to filter valid ground truth
+                gt_valid_mask = b_gt[:, TrajParamIndex.HAS_OBJECT] > 0.5
+                b_gt_valid = b_gt[gt_valid_mask]  # [valid_M, TrajParamIndex.END_OF_INDEX]
+            
+            # Skip if either valid predictions or ground truth is empty
+            if len(b_pred_valid) == 0 or len(b_gt_valid) == 0:
+                continue
+            
+            # Match predictions to ground truth
+            indices, _ = self.matcher(b_pred_valid, b_gt_valid)
+            
+            if len(indices) == 0:
+                continue
+            
+            # Extract matched pairs
+            pred_indices, gt_indices = zip(*indices)
+            pred_matched = b_pred_valid[list(pred_indices)]
+            gt_matched = b_gt_valid[list(gt_indices)]
             
             # Center position loss (L1)
             losses['center'] += F.l1_loss(
-                pred_matched[..., TrajParamIndex.X:TrajParamIndex.Z+1],
-                gt_matched[..., TrajParamIndex.X:TrajParamIndex.Z+1],
+                pred_matched[:, TrajParamIndex.X:TrajParamIndex.Z+1],
+                gt_matched[:, TrajParamIndex.X:TrajParamIndex.Z+1],
                 reduction='mean'
             )
             
             # Velocity loss (L1)
             losses['velocity'] += F.l1_loss(
-                pred_matched[..., TrajParamIndex.VX:TrajParamIndex.VY+1],
-                gt_matched[..., TrajParamIndex.VX:TrajParamIndex.VY+1],
+                pred_matched[:, TrajParamIndex.VX:TrajParamIndex.VY+1],
+                gt_matched[:, TrajParamIndex.VX:TrajParamIndex.VY+1],
                 reduction='mean'
             )
             
             # Acceleration loss (L1)
             losses['acceleration'] += F.l1_loss(
-                pred_matched[..., TrajParamIndex.AX:TrajParamIndex.AY+1],
-                gt_matched[..., TrajParamIndex.AX:TrajParamIndex.AY+1],
+                pred_matched[:, TrajParamIndex.AX:TrajParamIndex.AY+1],
+                gt_matched[:, TrajParamIndex.AX:TrajParamIndex.AY+1],
                 reduction='mean'
             )
             
             # Yaw loss (circular)
             yaw_diff = torch.abs(
-                pred_matched[..., TrajParamIndex.YAW] - 
-                gt_matched[..., TrajParamIndex.YAW]
+                pred_matched[:, TrajParamIndex.YAW] - 
+                gt_matched[:, TrajParamIndex.YAW]
             )
             yaw_diff = torch.min(yaw_diff, 2*torch.pi - yaw_diff)
             losses['yaw'] += yaw_diff.mean()
             
             # Size loss (L1)
             losses['size'] += F.l1_loss(
-                pred_matched[..., TrajParamIndex.LENGTH:TrajParamIndex.HEIGHT+1],
-                gt_matched[..., TrajParamIndex.LENGTH:TrajParamIndex.HEIGHT+1],
+                pred_matched[:, TrajParamIndex.LENGTH:TrajParamIndex.HEIGHT+1],
+                gt_matched[:, TrajParamIndex.LENGTH:TrajParamIndex.HEIGHT+1],
+                reduction='mean'
+            )
+            
+            # Object type loss (cross-entropy)
+            # Convert object type to integer index
+            pred_type = pred_matched[:, TrajParamIndex.OBJECT_TYPE]
+            gt_type = gt_matched[:, TrajParamIndex.OBJECT_TYPE].long()
+            losses['object_type'] += F.cross_entropy(
+                pred_type.unsqueeze(1),
+                gt_type
+            )
+            
+            # Attributes loss (binary cross-entropy)
+            attr_indices = [TrajParamIndex.HAS_OBJECT, TrajParamIndex.STATIC, TrajParamIndex.OCCLUDED]
+            pred_attrs = pred_matched[:, attr_indices]
+            gt_attrs = gt_matched[:, attr_indices]
+            losses['attributes'] += F.binary_cross_entropy_with_logits(
+                pred_attrs,
+                gt_attrs,
                 reduction='mean'
             )
         
         # Average over batches
+        valid_batch_count = 0
+        for b in range(B):
+            # Check if there are valid ground truth in this batch
+            if gt_valid is not None:
+                if gt_valid[b].sum() > 0:
+                    valid_batch_count += 1
+            else:
+                if (gt_trajs[b, :, TrajParamIndex.HAS_OBJECT] > 0.5).sum() > 0:
+                    valid_batch_count += 1
+                    
+        # Avoid division by zero
+        valid_batch_count = max(1, valid_batch_count)
+        
         for k in losses:
-            losses[k] = losses[k] / B
+            losses[k] = losses[k] / valid_batch_count
             
         # Add auxiliary losses if available
-        if 'aux_trajectories' in outputs:
+        if 'aux_trajs' in outputs:
             aux_weight = 0.5
-            for aux_trajs in outputs['aux_trajectories']:
-                aux_indices, _ = self.matcher(aux_trajs, gt_trajs, 0.0)
-                aux_losses = self.compute_losses(aux_trajs, gt_trajs, aux_indices)
-                for k in aux_losses:
-                    losses[f'aux_{k}'] = aux_weight * aux_losses[k]
+            for aux_idx, aux_trajs in enumerate(outputs['aux_trajs']):
+                aux_losses = self.compute_auxiliary_losses(
+                    aux_trajs, gt_trajs, gt_valid
+                )
+                
+                for k, v in aux_losses.items():
+                    losses[f'aux{aux_idx}_{k}'] = aux_weight * v
+                
                 aux_weight *= 0.5  # Reduce weight for later auxiliary predictions
         
         # Total loss
-        losses['total'] = sum(v for k, v in losses.items() if 'aux_' not in k)
+        losses['total'] = sum(v for k, v in losses.items() if not k.startswith('aux'))
         
         return losses
-
-    def compute_losses(self,
-                      pred_trajs: torch.Tensor,
-                      gt_trajs: torch.Tensor,
-                      indices: List[torch.Tensor]) -> Dict[str, torch.Tensor]:
-        """Helper function to compute individual losses."""
+        
+    def compute_auxiliary_losses(self,
+                               aux_trajs: torch.Tensor,
+                               gt_trajs: torch.Tensor,
+                               gt_valid: Optional[torch.Tensor] = None) -> Dict[str, torch.Tensor]:
+        """Compute losses for auxiliary trajectory predictions."""
+        B = aux_trajs.shape[0]
+        device = aux_trajs.device
+        
+        # Initialize losses
         losses = {
-            'center': 0.0,
-            'velocity': 0.0,
-            'acceleration': 0.0,
-            'yaw': 0.0,
-            'size': 0.0
+            'center': torch.tensor(0.0, device=device),
+            'velocity': torch.tensor(0.0, device=device),
+            'acceleration': torch.tensor(0.0, device=device),
+            'yaw': torch.tensor(0.0, device=device),
+            'size': torch.tensor(0.0, device=device),
+            'object_type': torch.tensor(0.0, device=device),
+            'attributes': torch.tensor(0.0, device=device)
         }
         
-        B = len(indices)
-        for b, b_indices in enumerate(indices):
-            if len(b_indices) == 0:
-                continue
-                
-            pred_idx = b_indices[:, 0]
-            gt_idx = b_indices[:, 1]
+        # Filter valid ground truth for each batch and compute losses
+        for b in range(B):
+            # Get batch predictions
+            b_pred = aux_trajs[b]  # [N, TrajParamIndex.END_OF_INDEX]
             
-            pred_matched = pred_trajs[b, pred_idx]
-            gt_matched = gt_trajs[b, gt_idx]
+            # Filter valid predictions (those with HAS_OBJECT > 0.5)
+            pred_valid = b_pred[:, TrajParamIndex.HAS_OBJECT] > 0.5
+            b_pred_valid = b_pred[pred_valid]  # [valid_N, TrajParamIndex.END_OF_INDEX]
+            
+            # Get batch ground truth
+            b_gt = gt_trajs[b]  # [M, TrajParamIndex.END_OF_INDEX]
+            
+            # Filter valid ground truth if gt_valid is provided
+            if gt_valid is not None:
+                b_gt_valid = b_gt[gt_valid[b]]  # [valid_M, TrajParamIndex.END_OF_INDEX]
+            else:
+                # Otherwise use HAS_OBJECT flag to filter valid ground truth
+                gt_valid_mask = b_gt[:, TrajParamIndex.HAS_OBJECT] > 0.5
+                b_gt_valid = b_gt[gt_valid_mask]  # [valid_M, TrajParamIndex.END_OF_INDEX]
+            
+            # Skip if either valid predictions or ground truth is empty
+            if len(b_pred_valid) == 0 or len(b_gt_valid) == 0:
+                continue
+            
+            # Match predictions to ground truth
+            indices, _ = self.matcher(b_pred_valid, b_gt_valid)
+            
+            if len(indices) == 0:
+                continue
+            
+            # Extract matched pairs
+            pred_indices, gt_indices = zip(*indices)
+            pred_matched = b_pred_valid[list(pred_indices)]
+            gt_matched = b_gt_valid[list(gt_indices)]
             
             # Center position loss (L1)
             losses['center'] += F.l1_loss(
-                pred_matched[..., TrajParamIndex.X:TrajParamIndex.Z+1],
-                gt_matched[..., TrajParamIndex.X:TrajParamIndex.Z+1],
+                pred_matched[:, TrajParamIndex.X:TrajParamIndex.Z+1],
+                gt_matched[:, TrajParamIndex.X:TrajParamIndex.Z+1],
                 reduction='mean'
             )
             
             # Velocity loss (L1)
             losses['velocity'] += F.l1_loss(
-                pred_matched[..., TrajParamIndex.VX:TrajParamIndex.VY+1],
-                gt_matched[..., TrajParamIndex.VX:TrajParamIndex.VY+1],
+                pred_matched[:, TrajParamIndex.VX:TrajParamIndex.VY+1],
+                gt_matched[:, TrajParamIndex.VX:TrajParamIndex.VY+1],
                 reduction='mean'
             )
             
             # Acceleration loss (L1)
             losses['acceleration'] += F.l1_loss(
-                pred_matched[..., TrajParamIndex.AX:TrajParamIndex.AY+1],
-                gt_matched[..., TrajParamIndex.AX:TrajParamIndex.AY+1],
+                pred_matched[:, TrajParamIndex.AX:TrajParamIndex.AY+1],
+                gt_matched[:, TrajParamIndex.AX:TrajParamIndex.AY+1],
                 reduction='mean'
             )
             
             # Yaw loss (circular)
             yaw_diff = torch.abs(
-                pred_matched[..., TrajParamIndex.YAW] - 
-                gt_matched[..., TrajParamIndex.YAW]
+                pred_matched[:, TrajParamIndex.YAW] - 
+                gt_matched[:, TrajParamIndex.YAW]
             )
             yaw_diff = torch.min(yaw_diff, 2*torch.pi - yaw_diff)
             losses['yaw'] += yaw_diff.mean()
             
             # Size loss (L1)
             losses['size'] += F.l1_loss(
-                pred_matched[..., TrajParamIndex.LENGTH:TrajParamIndex.HEIGHT+1],
-                gt_matched[..., TrajParamIndex.LENGTH:TrajParamIndex.HEIGHT+1],
+                pred_matched[:, TrajParamIndex.LENGTH:TrajParamIndex.HEIGHT+1],
+                gt_matched[:, TrajParamIndex.LENGTH:TrajParamIndex.HEIGHT+1],
                 reduction='mean'
             )
             
-        for k in losses:
-            losses[k] = losses[k] / B
+            # Object type loss (cross-entropy)
+            # Convert object type to integer index
+            pred_type = pred_matched[:, TrajParamIndex.OBJECT_TYPE]
+            gt_type = gt_matched[:, TrajParamIndex.OBJECT_TYPE].long()
+            losses['object_type'] += F.cross_entropy(
+                pred_type.unsqueeze(1),
+                gt_type
+            )
             
-        return losses 
+            # Attributes loss (binary cross-entropy)
+            attr_indices = [TrajParamIndex.HAS_OBJECT, TrajParamIndex.STATIC, TrajParamIndex.OCCLUDED]
+            pred_attrs = pred_matched[:, attr_indices]
+            gt_attrs = gt_matched[:, attr_indices]
+            losses['attributes'] += F.binary_cross_entropy_with_logits(
+                pred_attrs,
+                gt_attrs,
+                reduction='mean'
+            )
+        
+        # Average over batches with valid matches
+        valid_batch_count = 0
+        for b in range(B):
+            # Check if there are valid ground truth in this batch
+            if gt_valid is not None:
+                if gt_valid[b].sum() > 0:
+                    valid_batch_count += 1
+            else:
+                if (gt_trajs[b, :, TrajParamIndex.HAS_OBJECT] > 0.5).sum() > 0:
+                    valid_batch_count += 1
+                    
+        # Avoid division by zero
+        valid_batch_count = max(1, valid_batch_count)
+        
+        for k in losses:
+            losses[k] = losses[k] / valid_batch_count
+            
+        return losses
 
 class PerceptionLoss(nn.Module):
     """Loss function for end-to-end 3D perception."""
@@ -255,59 +389,137 @@ class PerceptionLoss(nn.Module):
         """
         Args:
             outputs: Dict from model with:
-                - trajectories: List of ObstacleTrajectory
-                - aux_trajectories: List of intermediate trajectory dicts
+                - trajectories: List of ObstacleTrajectory objects
+                - aux_trajectories: List of intermediate trajectory dicts containing:
+                    - motion_params: Tensor[B, N, TrajParamIndex.END_OF_INDEX]
+                    - object_type: Tensor[B, N] - class indices
+                    - attributes: Tensor[B, N, AttributeType.END_OF_INDEX]
+                    - type_logits: Tensor[B, N, len(ObjectType)]
             
             targets: Dict with:
-                - gt_trajectories: List of dicts with motion, type, attributes
+                - gt_trajs: Tensor[B, M, TrajParamIndex.END_OF_INDEX] - Ground truth trajectories
         """
         # Get the final layer predictions
         pred_trajectories = outputs['aux_trajectories'][-1]
         
-        # Motion parameters
-        pred_motion = pred_trajectories['motion_params'][0]  # First batch
+        # Get batch size
+        B = pred_trajectories['motion_params'].shape[0]
+        device = pred_trajectories['motion_params'].device
         
-        # Object type
-        pred_type_logits = pred_trajectories['type_logits'][0]  # First batch
+        # Initialize losses
+        total_loss = torch.tensor(0.0, device=device)
+        motion_loss = torch.tensor(0.0, device=device)
+        type_loss = torch.tensor(0.0, device=device)
+        attribute_loss = torch.tensor(0.0, device=device)
+        existence_loss = torch.tensor(0.0, device=device)
         
-        # Attributes
-        pred_attributes = pred_trajectories['attributes'][0]  # First batch
+        # Process each batch separately
+        valid_batch_count = 0
         
-        # Existence probability (from HAS_OBJECT attribute)
-        pred_existence = pred_attributes[:, AttributeType.HAS_OBJECT]
+        for b in range(B):
+            # Extract predictions for this batch
+            pred_motion = pred_trajectories['motion_params'][b]  # [N, TrajParamIndex.END_OF_INDEX]
+            pred_type_logits = pred_trajectories['type_logits'][b]  # [N, num_classes]
+            pred_attributes = pred_trajectories['attributes'][b]  # [N, AttributeType.END_OF_INDEX]
+            
+            # Extract ground truth for this batch
+            gt_trajs = targets['gt_trajs'][b]  # [M, TrajParamIndex.END_OF_INDEX]
+            
+            # Filter valid ground truth trajectories (those with HAS_OBJECT > 0.5)
+            gt_valid_mask = gt_trajs[:, TrajParamIndex.HAS_OBJECT] > 0.5
+            gt_valid = gt_trajs[gt_valid_mask]  # [valid_M, TrajParamIndex.END_OF_INDEX]
+            
+            # Skip if no valid ground truth
+            if len(gt_valid) == 0:
+                continue
+            
+            valid_batch_count += 1
+            
+            # Get existence probability (from HAS_OBJECT attribute)
+            pred_existence = pred_attributes[:, AttributeType.HAS_OBJECT]
+            
+            # Match predictions to ground truth using Hungarian algorithm
+            # For simplicity, we just use the motion parameters for matching
+            matcher = TrajectoryMatcher()
+            indices, _ = matcher(pred_motion, gt_valid)
+            
+            # Skip if no matches
+            if len(indices) == 0:
+                # Still need to compute existence loss
+                target_existence = torch.zeros_like(pred_existence)
+                existence_loss += F.binary_cross_entropy_with_logits(
+                    pred_existence, target_existence, reduction='mean'
+                )
+                continue
+            
+            # Reorder predictions to match ground truth
+            matched_indices, gt_indices = zip(*indices)
+            matched_motion = pred_motion[list(matched_indices)]
+            matched_type_logits = pred_type_logits[list(matched_indices)]
+            matched_attributes = pred_attributes[list(matched_indices)]
+            
+            # Get matched ground truth
+            matched_gt = gt_valid[list(gt_indices)]
+            
+            # Compute motion loss (L2 distance for position, velocity, size)
+            # Position (XYZ)
+            pos_loss = F.mse_loss(
+                matched_motion[:, TrajParamIndex.X:TrajParamIndex.Z+1],
+                matched_gt[:, TrajParamIndex.X:TrajParamIndex.Z+1]
+            )
+            
+            # Velocity (VX, VY)
+            vel_loss = F.mse_loss(
+                matched_motion[:, TrajParamIndex.VX:TrajParamIndex.VY+1],
+                matched_gt[:, TrajParamIndex.VX:TrajParamIndex.VY+1]
+            )
+            
+            # Size (LENGTH, WIDTH, HEIGHT)
+            size_loss = F.mse_loss(
+                matched_motion[:, TrajParamIndex.LENGTH:TrajParamIndex.HEIGHT+1],
+                matched_gt[:, TrajParamIndex.LENGTH:TrajParamIndex.HEIGHT+1]
+            )
+            
+            # Yaw (circular)
+            yaw_diff = torch.abs(matched_motion[:, TrajParamIndex.YAW] - matched_gt[:, TrajParamIndex.YAW])
+            yaw_loss = torch.min(yaw_diff, 2*torch.pi - yaw_diff).mean()
+            
+            # Combine motion losses
+            batch_motion_loss = pos_loss + vel_loss + size_loss + yaw_loss
+            motion_loss += batch_motion_loss
+            
+            # Compute object type loss
+            # Get ground truth object type as integer indices
+            gt_type = matched_gt[:, TrajParamIndex.OBJECT_TYPE].long()
+            batch_type_loss = F.cross_entropy(matched_type_logits, gt_type)
+            type_loss += batch_type_loss
+            
+            # Compute attribute loss (binary cross-entropy)
+            # Get relevant attributes: STATIC, OCCLUDED
+            attrs_idx = [TrajParamIndex.STATIC, TrajParamIndex.OCCLUDED]
+            pred_attrs = matched_attributes[:, 1:3]  # Skip HAS_OBJECT (index 0)
+            gt_attrs = matched_gt[:, attrs_idx]
+            
+            batch_attr_loss = F.binary_cross_entropy_with_logits(pred_attrs, gt_attrs)
+            attribute_loss += batch_attr_loss
+            
+            # Compute existence loss
+            # Create target: 1 for matched queries, 0 for unmatched
+            target_existence = torch.zeros_like(pred_existence)
+            target_existence[list(matched_indices)] = 1.0
+            
+            batch_existence_loss = F.binary_cross_entropy_with_logits(
+                pred_existence, target_existence
+            )
+            existence_loss += batch_existence_loss
         
-        # Extract ground truth values
-        gt_trajectories = targets['gt_trajectories']
+        # Average over batches with valid matches
+        valid_batch_count = max(1, valid_batch_count)  # Avoid division by zero
         
-        gt_motion = torch.stack([traj['motion'] for traj in gt_trajectories])
-        gt_type = torch.tensor([traj['type'] for traj in gt_trajectories], device=pred_motion.device)
-        gt_attributes = torch.stack([traj['attributes'] for traj in gt_trajectories])
-        
-        # Match predictions to ground truth
-        indices = self.bipartite_matching(pred_motion, gt_motion)
-        
-        # Reorder predictions to match ground truth
-        matched_indices = indices[0]  # Indices of predictions matched to GT
-        
-        # Get matched predictions
-        matched_motion = pred_motion[matched_indices]
-        matched_type_logits = pred_type_logits[matched_indices]
-        matched_attributes = pred_attributes[matched_indices]
-        
-        # Compute losses
-        motion_loss = F.mse_loss(matched_motion, gt_motion)
-        
-        type_loss = F.cross_entropy(matched_type_logits, gt_type)
-        
-        # Binary classification for each attribute
-        attribute_loss = F.binary_cross_entropy(matched_attributes, gt_attributes)
-        
-        # Existence loss - predict which queries should output valid objects
-        # Create target existence: 1 for matched queries, 0 for unmatched
-        target_existence = torch.zeros_like(pred_existence)
-        target_existence[matched_indices] = 1.0
-        
-        existence_loss = F.binary_cross_entropy(pred_existence, target_existence)
+        motion_loss /= valid_batch_count
+        type_loss /= valid_batch_count
+        attribute_loss /= valid_batch_count
+        existence_loss /= valid_batch_count
         
         # Weighted sum of losses
         total_loss = (
@@ -323,51 +535,4 @@ class PerceptionLoss(nn.Module):
             'type_loss': type_loss,
             'attribute_loss': attribute_loss,
             'existence_loss': existence_loss
-        }
-    
-    def bipartite_matching(self, pred_motion, gt_motion):
-        """Match predictions to ground truth using Hungarian algorithm.
-        
-        Args:
-            pred_motion: Tensor[N, TrajParamIndex.END_OF_INDEX]
-            gt_motion: Tensor[M, TrajParamIndex.END_OF_INDEX]
-        
-        Returns:
-            Tuple of (row_indices, col_indices)
-        """
-        N, M = pred_motion.shape[0], gt_motion.shape[0]
-        
-        # Compute pairwise center distance cost
-        pred_centers = pred_motion[:, :3].unsqueeze(1)  # [N, 1, 3]
-        gt_centers = gt_motion[:, :3].unsqueeze(0)  # [1, M, 3]
-        
-        # Compute L2 distance
-        cost_matrix = torch.sum((pred_centers - gt_centers) ** 2, dim=-1)  # [N, M]
-        
-        # Use Hungarian algorithm
-        # For simplicity we just use a greedy matching here
-        # In practice, you should use scipy.optimize.linear_sum_assignment
-        # or torch-scatter's linear_sum_assignment
-        
-        # Greedy matching
-        matched_indices = []
-        unmatched_preds = list(range(N))
-        unmatched_gts = list(range(M))
-        
-        # Match each GT to closest prediction
-        for gt_idx in range(M):
-            if not unmatched_preds:
-                break
-                
-            # Find closest unmatched prediction
-            costs = cost_matrix[unmatched_preds, gt_idx]
-            pred_idx = unmatched_preds[torch.argmin(costs).item()]
-            
-            matched_indices.append((pred_idx, gt_idx))
-            unmatched_preds.remove(pred_idx)
-            unmatched_gts.remove(gt_idx)
-        
-        # Convert to row and column indices
-        row_indices, col_indices = zip(*matched_indices) if matched_indices else ([], [])
-        
-        return torch.tensor(row_indices, device=pred_motion.device), torch.tensor(col_indices, device=pred_motion.device) 
+        } 

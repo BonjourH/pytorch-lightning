@@ -9,9 +9,10 @@ TEST_CLIP="/home/xinjian/Code/VAutoLabelerCore/labeling_info/1_20231219T122348_p
 # Create a temporary test script
 TMP_SCRIPT=$(mktemp)
 cat > "$TMP_SCRIPT" << 'EOF'
-from data import MultiFrameDataset
-from base import SourceCameraId
+from data import MultiFrameDataset, custom_collate_fn
+from base import SourceCameraId, CameraType, CameraParamIndex, TrajParamIndex, ObjectType
 from torch.utils.data import DataLoader
+import torch
 
 # Test configuration
 clip_dirs = [
@@ -40,7 +41,8 @@ dataloader = DataLoader(
     dataset,
     batch_size=2,
     shuffle=True,
-    num_workers=2
+    num_workers=2,
+    collate_fn=custom_collate_fn
 )
 
 print("\n=== Testing Batch Processing ===")
@@ -53,30 +55,33 @@ for batch in dataloader:
         print(f"Camera {camera_id.name}: {images.shape}")
     
     print("\nEgo state info:")
-    print(f"Number of ego states: {len(batch['ego_states'])}")
-    print(f"First ego state keys: {batch['ego_states'][0].keys()}")
+    print(f"Shape of ego states tensor: {batch['ego_states'].shape}")
     
-    print("\nObject info:")
-    print(f"Number of frames: {len(batch['objects_data'])}")
-    if len(batch['objects_data']) > 0:
-        frame_data = batch['objects_data'][0]
-        print(f"First frame object data:")
-        print(f"  Number of objects: {len(frame_data['ids'])}")
-        if len(frame_data['ids']) > 0:
-            print(f"  Types shape: {frame_data['types'].shape}")
-            print(f"  Positions shape: {frame_data['positions'].shape}")
-            print(f"  Dimensions shape: {frame_data['dimensions'].shape}")
-            print(f"  Yaws shape: {frame_data['yaws'].shape}")
-            print(f"  Velocities shape: {frame_data['velocities'].shape}")
+    print("\nTrajectory info:")
+    print(f"Shape of trajectories tensor: {batch['trajs'].shape}")
+    
+    # Count valid objects (those with HAS_OBJECT=1)
+    valid_traj_counts = (batch['trajs'][:, :, TrajParamIndex.HAS_OBJECT] > 0.5).sum(dim=1)
+    print(f"Valid trajectories per sample: {valid_traj_counts}")
+    
+    # Print info about the first valid trajectory in the first sample
+    if valid_traj_counts[0] > 0:
+        # Find first valid trajectory
+        first_valid_idx = torch.nonzero(batch['trajs'][0, :, TrajParamIndex.HAS_OBJECT] > 0.5)[0].item()
+        first_traj = batch['trajs'][0, first_valid_idx]
+        
+        print(f"\nFirst valid trajectory details:")
+        print(f"  Position: ({first_traj[TrajParamIndex.X]:.2f}, {first_traj[TrajParamIndex.Y]:.2f}, {first_traj[TrajParamIndex.Z]:.2f})")
+        print(f"  Velocity: ({first_traj[TrajParamIndex.VX]:.2f}, {first_traj[TrajParamIndex.VY]:.2f})")
+        print(f"  Dimensions: {first_traj[TrajParamIndex.LENGTH]:.2f} x {first_traj[TrajParamIndex.WIDTH]:.2f} x {first_traj[TrajParamIndex.HEIGHT]:.2f}")
+        print(f"  Yaw: {first_traj[TrajParamIndex.YAW]:.2f}")
+        print(f"  Object type: {ObjectType(int(first_traj[TrajParamIndex.OBJECT_TYPE].item()))}")
     
     print("\nCalibration info:")
     for camera_id, calib in batch['calibrations'].items():
         print(f"\nCamera {camera_id.name}:")
-        print(f"  Camera type: {calib['camera_type'].name}")
-        print(f"  Intrinsic shape: {calib['intrinsic'].shape}")
-        print(f"  Extrinsic shape: {calib['extrinsic'].shape}")
-        if calib['distortion'].numel() > 0:  # Check if distortion tensor is not empty
-            print(f"  Distortion shape: {calib['distortion'].shape}")
+        print(f"  Camera parameters shape: {calib.shape}")
+        print(f"  Camera type: {CameraType(int(calib[0, CameraParamIndex.CAMERA_TYPE].item()))}")
     
     # Only process one batch
     break

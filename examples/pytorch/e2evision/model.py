@@ -1,11 +1,13 @@
 import torch
 import torch.nn as nn
 import torchvision.models as models
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 import torch.nn.functional as F
 from base import (
     SourceCameraId, CameraType, ObstacleTrajectory, 
-    ObjectType, TrajParamIndex, Point3DAccMotion, AttributeType
+    ObjectType, TrajParamIndex, Point3DAccMotion, AttributeType,
+    CameraIntrinsicIndex, ExtrinsicIndex, EgoStateIndex,
+    CameraParamIndex
 )
 import numpy as np
 from temporal_fusion import TemporalAttentionFusion
@@ -34,7 +36,7 @@ class TrajectoryDecoder(nn.Module):
                  num_queries: int = 100,
                  feature_dim: int = 256,
                  hidden_dim: int = 512,
-                 num_points: int = 24):  # Points to sample on 3D box (4 per face)
+                 num_points: int = 25):  # Points to sample per face of the unit cube
         super().__init__()
         self.num_queries = num_queries
         self.num_layers = num_layers
@@ -104,7 +106,7 @@ class TrajectoryDecoder(nn.Module):
     def _generate_unit_cube_points(self):
         """Generate points on unit cube faces at initialization time."""
         # Number of points per edge
-        points_per_edge = int(np.sqrt(self.num_points // 6))
+        points_per_edge = int(np.sqrt(self.num_points))
         
         # Create unit coordinates (not including 1.0)
         coords = torch.linspace(0, 1, points_per_edge+1)[:-1]  # [0, 1/n, 2/n, ..., (n-1)/n]
@@ -333,15 +335,15 @@ class TrajectoryDecoder(nn.Module):
     def gather_point_features(self, 
                             box_points: torch.Tensor, 
                             features_dict: Dict[SourceCameraId, torch.Tensor],
-                            calibrations: Dict[SourceCameraId, Dict],
+                            calibrations: Dict[SourceCameraId, torch.Tensor],
                             ego_states: torch.Tensor) -> torch.Tensor:
         """Gather features for box points from all cameras and frames.
         
         Args:
             box_points: Tensor[B, N, num_points, 3]: Points in object local coordinates
             features_dict: Dict[camera_id -> Tensor[B, T, C, H, W]]
-            calibrations: Dict[camera_id -> calibration_dict]
-            ego_states: Tensor[B, T, 5] position, yaw, timestamp
+            calibrations: Dict[camera_id -> Tensor[B, CameraParamIndex.END_OF_INDEX]]
+            ego_states: Tensor[B, T, EgoStateIndex.END_OF_INDEX]
             
         Returns:
             Tensor[B, N, num_points, T, num_cameras, C]
@@ -428,45 +430,50 @@ class TrajectoryDecoder(nn.Module):
                 feature_H, feature_W = features_t.shape[2:4]
                 
                 # Project points to camera view
-                calib = calibrations[camera_id]
-                img_width = calib.get('image_width', feature_W) 
-                img_height = calib.get('image_height', feature_H)
+                calib = calibrations[camera_id]  # [B, CameraParamIndex.END_OF_INDEX]
                 
-                # Project 3D points to image coordinates (already normalized 0-1)
-                points_2d = self.project_points_to_image(
-                    ego_points.reshape(B*N*P, 3),
-                    calib['intrinsic'],
-                    calib['extrinsic'],
-                    (img_width, img_height)
-                )  # [B*N*P, 2] - now in 0-1 normalized coordinates
+                # Use first batch's calibration for image dimensions
+                img_width = calib[0, CameraParamIndex.IMAGE_WIDTH].item()
+                img_height = calib[0, CameraParamIndex.IMAGE_HEIGHT].item()
                 
-                # Convert from 0-1 to [-1, 1] directly for grid_sample
-                points_2d[:, 0] = 2 * points_2d[:, 0] - 1
-                points_2d[:, 1] = 2 * points_2d[:, 1] - 1
-                
-                # Check if points are in image bounds
-                valid_mask = (
-                    (points_2d[:, 0] >= -1) & (points_2d[:, 0] <= 1) &
-                    (points_2d[:, 1] >= -1) & (points_2d[:, 1] <= 1)
-                ).float().reshape(B, N, P, 1)
-                
-                # Clamp values to prevent sampling outside
-                points_2d = torch.clamp(points_2d, -1, 1)
-                
-                # Sample features
-                sampled_feats = F.grid_sample(
-                    features_t,
-                    points_2d.reshape(B, -1, 1, 2),
-                    mode='bilinear',
-                    align_corners=False
-                )  # [B, C, N*P, 1]
-                
-                # Reshape and apply valid mask
-                sampled_feats = sampled_feats.reshape(B, C, N, P).permute(0, 2, 3, 1)  # [B, N, P, C]
-                sampled_feats = sampled_feats * valid_mask
-                
-                # Store in output tensor
-                all_features[:, :, :, t, camera_idx] = sampled_feats
+                # Process each batch separately since the calibration can be different
+                for b in range(B):
+                    # Project 3D points to image coordinates
+                    points_2d_b = self.project_points_to_image(
+                        ego_points[b].reshape(N*P, 3),
+                        calib[b],
+                        None,  # extrinsic is now merged into calib tensor
+                        (img_width, img_height)
+                    )  # [N*P, 2] - normalized coordinates (0-1)
+                    
+                    # Convert from 0-1 to [-1, 1] for grid_sample
+                    points_2d_grid = points_2d_b.clone()
+                    points_2d_grid[:, 0] = 2 * points_2d_grid[:, 0] - 1
+                    points_2d_grid[:, 1] = 2 * points_2d_grid[:, 1] - 1
+                    
+                    # Check if points are in image bounds
+                    valid_mask = (
+                        (points_2d_grid[:, 0] >= -1) & (points_2d_grid[:, 0] <= 1) &
+                        (points_2d_grid[:, 1] >= -1) & (points_2d_grid[:, 1] <= 1)
+                    ).float().reshape(N, P, 1)
+                    
+                    # Clamp values to prevent sampling outside
+                    points_2d_grid = torch.clamp(points_2d_grid, -1, 1)
+                    
+                    # Sample features (for single batch)
+                    sampled_feats = F.grid_sample(
+                        features_t[b:b+1],
+                        points_2d_grid.reshape(1, N*P, 1, 2),
+                        mode='bilinear',
+                        align_corners=False
+                    )  # [1, C, N*P, 1]
+                    
+                    # Reshape and apply valid mask
+                    sampled_feats = sampled_feats.reshape(C, N, P).permute(1, 2, 0)  # [N, P, C]
+                    sampled_feats = sampled_feats * valid_mask
+                    
+                    # Store in output tensor
+                    all_features[b, :, :, t, camera_idx] = sampled_feats
         
         return all_features
     
@@ -533,40 +540,69 @@ class TrajectoryDecoder(nn.Module):
                          points_3d: torch.Tensor, 
                          intrinsic: torch.Tensor, 
                          extrinsic: torch.Tensor,
-                         image_size: Tuple[int, int]) -> torch.Tensor:
+                         image_size: Optional[Tuple[int, int]] = None) -> torch.Tensor:
         """Project 3D points to image coordinates considering different camera types.
         
         Args:
             points_3d: Tensor[N, 3] - 3D points in ego coordinate system
-            intrinsic: Tensor[CameraIntrinsicIndex.END_OF_INDEX] - Camera intrinsic parameters
-            extrinsic: Tensor[4, 4] - Camera extrinsic matrix (ego to camera)
-            image_size: Tuple(width, height) - Original image dimensions
+            intrinsic: Tensor[CameraParamIndex.END_OF_INDEX] - Camera parameters
+            extrinsic: Unused - kept for backward compatibility
+            image_size: Optional tuple (width, height) - If not provided, uses from intrinsic
             
         Returns:
             Tensor[N, 2] - 2D pixel coordinates normalized by image dimensions (0 to 1)
         """
         device = points_3d.device
         
-        # Extract camera parameters from intrinsic vector
-        camera_type = int(intrinsic[CameraIntrinsicIndex.CAMERA_TYPE].item())
-        img_width = intrinsic[CameraIntrinsicIndex.IMAGE_WIDTH].item()
-        img_height = intrinsic[CameraIntrinsicIndex.IMAGE_HEIGHT].item()
-        fx = intrinsic[CameraIntrinsicIndex.FX]
-        fy = intrinsic[CameraIntrinsicIndex.FY]
-        cx = intrinsic[CameraIntrinsicIndex.CX]
-        cy = intrinsic[CameraIntrinsicIndex.CY]
+        # Extract camera parameters
+        camera_type = int(intrinsic[CameraParamIndex.CAMERA_TYPE].item())
+        img_width = intrinsic[CameraParamIndex.IMAGE_WIDTH].item()
+        img_height = intrinsic[CameraParamIndex.IMAGE_HEIGHT].item()
+        fx = intrinsic[CameraParamIndex.FX]
+        fy = intrinsic[CameraParamIndex.FY]
+        cx = intrinsic[CameraParamIndex.CX]
+        cy = intrinsic[CameraParamIndex.CY]
+        
+        # Override image size if provided
+        if image_size is not None:
+            img_width, img_height = image_size
         
         # Distortion parameters
-        k1 = intrinsic[CameraIntrinsicIndex.K1]
-        k2 = intrinsic[CameraIntrinsicIndex.K2]
-        k3 = intrinsic[CameraIntrinsicIndex.K3]
-        k4 = intrinsic[CameraIntrinsicIndex.K4]
-        p1 = intrinsic[CameraIntrinsicIndex.P1]
-        p2 = intrinsic[CameraIntrinsicIndex.P2]
+        k1 = intrinsic[CameraParamIndex.K1]
+        k2 = intrinsic[CameraParamIndex.K2]
+        k3 = intrinsic[CameraParamIndex.K3]
+        k4 = intrinsic[CameraParamIndex.K4]
+        p1 = intrinsic[CameraParamIndex.P1]
+        p2 = intrinsic[CameraParamIndex.P2]
+        
+        # Convert quaternion to rotation matrix
+        qw = intrinsic[CameraParamIndex.QW]
+        qx = intrinsic[CameraParamIndex.QX]
+        qy = intrinsic[CameraParamIndex.QY]
+        qz = intrinsic[CameraParamIndex.QZ]
+        
+        # Quaternion to rotation matrix
+        R = torch.zeros(3, 3, device=device)
+        R[0, 0] = 1 - 2*qy*qy - 2*qz*qz
+        R[0, 1] = 2*qx*qy - 2*qz*qw
+        R[0, 2] = 2*qx*qz + 2*qy*qw
+        R[1, 0] = 2*qx*qy + 2*qz*qw
+        R[1, 1] = 1 - 2*qx*qx - 2*qz*qz
+        R[1, 2] = 2*qy*qz - 2*qx*qw
+        R[2, 0] = 2*qx*qz - 2*qy*qw
+        R[2, 1] = 2*qy*qz + 2*qx*qw
+        R[2, 2] = 1 - 2*qx*qx - 2*qy*qy
+        
+        # Translation vector
+        t = torch.tensor([
+            intrinsic[CameraParamIndex.X], 
+            intrinsic[CameraParamIndex.Y], 
+            intrinsic[CameraParamIndex.Z]
+        ], device=device)
         
         # Transform points from ego to camera coordinate system
-        points_hom = torch.cat([points_3d, torch.ones(points_3d.shape[0], 1, device=device)], dim=1)  # [N, 4]
-        points_cam = torch.matmul(points_hom, extrinsic.T)[:, :3]  # [N, 3]
+        # R_cw @ (p - t)
+        points_cam = torch.matmul(points_3d - t, R.T)
         
         # Points behind the camera
         behind_camera = (points_cam[:, 2] <= 0)
@@ -715,7 +751,7 @@ class E2EPerceptionNet(nn.Module):
         
         # Per-camera temporal fusion
         self.temporal_fusion = nn.ModuleDict({
-            str(camera_id): TemporalAttentionFusion(
+            str(int(camera_id)): TemporalAttentionFusion(
                 feature_dim=feature_dim,
                 num_heads=8,
                 dropout=0.1
@@ -735,8 +771,8 @@ class E2EPerceptionNet(nn.Module):
         Args:
             batch: Dict containing:
                 - images: Dict[camera_id -> Tensor[B, T, 3, H, W]]
-                - ego_states: List[Dict]
-                - calibrations: Dict[camera_id -> Dict]
+                - calibrations: Dict[camera_id -> Tensor[B, CameraParamIndex.END_OF_INDEX]]
+                - ego_states: Tensor[B, T, EgoStateIndex.END_OF_INDEX]
         """
         # Extract features from each camera
         features = {}
@@ -749,7 +785,7 @@ class E2EPerceptionNet(nn.Module):
             feat = feat.view(B, T, *feat.shape[1:])  # [B, T, C, H, W]
             
             # Apply temporal fusion for each camera independently
-            fused_feat = self.temporal_fusion[str(camera_id)](feat)  # [B, T, C, H, W]
+            fused_feat = self.temporal_fusion[str(int(camera_id))](feat)  # [B, T, C, H, W]
             
             # Store fused features
             features[camera_id] = fused_feat

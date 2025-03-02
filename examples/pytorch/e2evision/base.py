@@ -5,40 +5,7 @@ from dataclasses import dataclass
 import numpy as np
 
 
-class AttributeType(IntEnum):
-    """Attribute type enumeration."""
-    HAS_OBJECT = 0
-    STATIC = 1
-    OCCLUDED = 2
-    END_OF_INDEX = 3
-
-
-class ObjectType(IntEnum):
-    """Object type enumeration."""
-    UNKNOWN = 0
-    CAR = 1
-    SUV = 2
-    LIGHTTRUCK = 3
-    TRUCK = 4
-    BUS = 5
-    PEDESTRIAN = 6
-    BICYCLE = 7
-    MOTO = 8
-    CYCLIST = 9
-    MOTORCYCLIST = 10
-    CONE = 11
-    BARRIER = 12
-
-    def __str__(self):
-        return self.name
-    
-    def __repr__(self):
-        return self.name
-    
-    def __int__(self):
-        return self.value
-
-
+# CAMERA RELATED 
 class SourceCameraId(IntEnum):
     NO_CAMERA = 0
     FRONT_LEFT_CAMERA = 1
@@ -56,16 +23,6 @@ class SourceCameraId(IntEnum):
     STITCH_CAMERA = 20
     BEV_CAMERA = 21
     
-    def __str__(self):
-        return self.name
-    
-    def __repr__(self):
-        return self.name
-    
-    def __int__(self):
-        return self.value
-
-
 class CameraType(IntEnum):
     UNKNOWN = 0
     PINHOLE = 1
@@ -73,41 +30,70 @@ class CameraType(IntEnum):
     GENERAL_DISTORT = 3
     OMNIDIRECTIONAL = 4
     
+class CameraParamIndex(IntEnum):
+    CAMERA_ID = 0
+    CAMERA_TYPE = 1
+    IMAGE_WIDTH = 2
+    IMAGE_HEIGHT = 3
+    FX = 4
+    FY = 5
+    CX = 6
+    CY = 7
+    K1 = 8
+    K2 = 9
+    K3 = 10
+    K4 = 11
+    P1 = 12
+    P2 = 13
+    X = 14
+    Y = 15
+    Z = 16
+    QX = 17
+    QY = 18
+    QZ = 19
+    QW = 20
+    END_OF_INDEX = 21
+
+# EGO STATE RELATED
+class EgoStateIndex(IntEnum):
+    X = 0
+    Y = 1
+    YAW = 2
+    PITCH_CORRECTION = 3
+    VX = 4
+    VY = 5
+    AX = 6
+    AY = 7
+    YAW_RATE = 8
+    END_OF_INDEX = 9    
+    
+# OBSTACLE RELATED 
+class AttributeType(IntEnum):
+    """Attribute type enumeration."""
+    HAS_OBJECT = 0
+    STATIC = 1
+    OCCLUDED = 2
+    END_OF_INDEX = 3
+
+class ObjectType(IntEnum):
+    """Object type enumeration."""
+    UNKNOWN = 0
+    CAR = 1
+    SUV = 2
+    LIGHTTRUCK = 3
+    TRUCK = 4
+    BUS = 5
+    PEDESTRIAN = 6
+    BICYCLE = 7
+    MOTO = 8
+    CYCLIST = 9
+    MOTORCYCLIST = 10
+    CONE = 11
+    BARRIER = 12
+    
     def __str__(self):
         return self.name
-    
-    def __repr__(self):
-        return self.name
-    
-    def __int__(self):
-        return self.value
 
-
-class CameraIntrinsicIndex(IntEnum):
-    CAMERA_TYPE = 0
-    IMAGE_WIDTH = 1
-    IMAGE_HEIGHT = 2
-    FX = 3
-    FY = 4
-    CX = 5
-    CY = 6
-    K1 = 7
-    K2 = 8
-    K3 = 9
-    K4 = 10
-    P1 = 11
-    P2 = 12
-    END_OF_INDEX = 13
-
-
-@dataclass
-class CameraCalibration:
-    camera_id: Optional[SourceCameraId] = None
-    camera_type: Optional[CameraType] = None
-    intrinsic: Optional[torch.Tensor] = None
-    distortion: Optional[torch.Tensor] = None
-    extrinsic: Optional[torch.Tensor] = None # from vehicle coordinate to camera coordinate
-    
 
 class TrajParamIndex(IntEnum):
     """Motion parameters index enumeration."""
@@ -122,17 +108,13 @@ class TrajParamIndex(IntEnum):
     LENGTH = 8      # dimensions
     WIDTH = 9
     HEIGHT = 10
-    END_OF_INDEX = 11
+    HAS_OBJECT = 11
+    STATIC = 12
+    OCCLUDED = 13
+    OBJECT_TYPE = 14
+    END_OF_INDEX = 15
 
-    def __str__(self):
-        return self.name
-    
-    def __repr__(self):
-        return self.name
-    
-    def __int__(self):
-        return self.value
-
+MAX_TRAJ_NB = 128
 
 @dataclass
 class Point3DAccMotion:
