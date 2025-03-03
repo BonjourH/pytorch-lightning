@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torchvision.models as models
+from torchvision.models import ResNet50_Weights
 from typing import Dict, List, Tuple, Optional
 import torch.nn.functional as F
 from base import (
@@ -15,8 +16,8 @@ class ImageFeatureExtractor(nn.Module):
     """2D CNN backbone for extracting image features."""
     def __init__(self, out_channels: int = 256):
         super().__init__()
-        # Use ResNet50 as backbone
-        resnet = models.resnet50(pretrained=True)
+        # Use ResNet50 as backbone with pre-trained weights
+        resnet = models.resnet50(weights=ResNet50_Weights.DEFAULT) # ResNet50_Weights.IMAGENET1K_V1,...
         self.backbone = nn.Sequential(
             *list(resnet.children())[:-2],  # Remove avg pool and fc
             nn.Conv2d(2048, out_channels, 1),  # Reduce channel dimension
@@ -819,6 +820,7 @@ class E2EPerceptionNet(nn.Module):
             B, T = images.shape[:2]
             
             # Extract features for all frames
+            import pdb; pdb.set_trace()
             feat = self.feature_extractor(images.flatten(0, 1))  # [B*T, C, H, W]
             feat = feat.view(B, T, *feat.shape[1:])  # [B, T, C, H, W]
             
