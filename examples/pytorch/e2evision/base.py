@@ -243,3 +243,41 @@ class ObstacleTrajectory:
         corners = corner_offsets @ rot.T + center
         return corners
     
+def tensor_to_trajectory(traj_params: torch.Tensor, traj_id: int = 0, t0: float = 0.0) -> ObstacleTrajectory:
+    """Convert trajectory parameters tensor to ObstacleTrajectory object.
+    
+    Args:
+        traj_params: Tensor[TrajParamIndex.END_OF_INDEX] - Trajectory parameters
+        traj_id: Optional trajectory ID
+        t0: Optional reference timestamp
+        
+    Returns:
+        ObstacleTrajectory object
+    """
+    # Create Point3DAccMotion object
+    motion = Point3DAccMotion(
+        x=float(traj_params[TrajParamIndex.X]),
+        y=float(traj_params[TrajParamIndex.Y]),
+        z=float(traj_params[TrajParamIndex.Z]),
+        vx=float(traj_params[TrajParamIndex.VX]),
+        vy=float(traj_params[TrajParamIndex.VY]),
+        vz=0.0,  # Z velocity not predicted
+        ax=float(traj_params[TrajParamIndex.AX]),
+        ay=float(traj_params[TrajParamIndex.AY]),
+        az=0.0   # Z acceleration not predicted
+    )
+    
+    # Create ObstacleTrajectory object
+    return ObstacleTrajectory(
+        id=traj_id,
+        motion=motion,
+        yaw=float(traj_params[TrajParamIndex.YAW]),
+        length=float(traj_params[TrajParamIndex.LENGTH]),
+        width=float(traj_params[TrajParamIndex.WIDTH]),
+        height=float(traj_params[TrajParamIndex.HEIGHT]),
+        object_type=ObjectType(int(traj_params[TrajParamIndex.OBJECT_TYPE].item())),
+        t0=t0,
+        static=bool(traj_params[TrajParamIndex.STATIC] > 0.5),
+        valid=bool(traj_params[TrajParamIndex.HAS_OBJECT] > 0.5)
+    )
+    

@@ -6,8 +6,7 @@ import torch.nn.functional as F
 from base import (
     SourceCameraId, CameraType, ObstacleTrajectory, 
     ObjectType, TrajParamIndex, Point3DAccMotion, AttributeType,
-    CameraIntrinsicIndex, ExtrinsicIndex, EgoStateIndex,
-    CameraParamIndex
+    EgoStateIndex, CameraParamIndex
 )
 import numpy as np
 from temporal_fusion import TemporalAttentionFusion
@@ -30,7 +29,8 @@ class ImageFeatureExtractor(nn.Module):
     
 
 class TrajectoryDecoder(nn.Module):
-    """Trajectory decoder with iterative refinement and feature sampling."""
+    """Trajectory decoder module."""
+    
     def __init__(self,
                  num_layers: int = 6,
                  num_queries: int = 100,
@@ -38,8 +38,10 @@ class TrajectoryDecoder(nn.Module):
                  hidden_dim: int = 512,
                  num_points: int = 25):  # Points to sample per face of the unit cube
         super().__init__()
-        self.num_queries = num_queries
         self.num_layers = num_layers
+        self.num_queries = num_queries
+        self.feature_dim = feature_dim
+        self.hidden_dim = hidden_dim
         self.num_points = num_points
         
         # Learnable trajectory queries
@@ -49,7 +51,7 @@ class TrajectoryDecoder(nn.Module):
         self.motion_head = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
-            nn.Linear(hidden_dim, TrajParamIndex.END_OF_INDEX),
+            nn.Linear(hidden_dim, TrajParamIndex.HEIGHT + 1),
             nn.Sigmoid()  # Output normalized 0-1 values
         )
         
@@ -149,76 +151,86 @@ class TrajectoryDecoder(nn.Module):
         """Predict trajectory parameters from query embeddings.
         
         Args:
-            queries: Tensor[B, N, hidden_dim]
+            queries: Tensor[B, N, hidden_dim] - Object queries
             
         Returns:
-            Dict containing:
-                - 'motion_params': Tensor[B, N, TrajParamIndex.END_OF_INDEX]
-                - 'object_type': Tensor[B, N] - Class indices
-                - 'attributes': Tensor[B, N, AttributeType.END_OF_INDEX]
+            Dict with:
+            - traj_params: Tensor[B, N, TrajParamIndex.END_OF_INDEX] - Trajectory parameters
+            - type_logits: Tensor[B, N, len(ObjectType)] - Object type logits
         """
-        B, N = queries.shape[:2]
+        B, N, _ = queries.shape
+        device = queries.device
+        
+        # Initialize trajectory parameter tensor
+        traj_params = torch.zeros(B, N, TrajParamIndex.END_OF_INDEX, device=device)
         
         # 1. Predict motion parameters (normalized 0-1)
-        norm_params = self.motion_head(queries)  # [B, N, TrajParamIndex.END_OF_INDEX]
+        norm_params = self.motion_head(queries)  # [B, N, TrajParamIndex.HEIGHT + 1]
         
         # Scale parameters to real values
         min_vals = self.param_ranges['min']
         max_vals = self.param_ranges['max']
         motion_params = norm_params * (max_vals - min_vals) + min_vals
+        traj_params[:, :, :TrajParamIndex.HEIGHT + 1] = motion_params
         
         # 2. Predict object type
         type_logits = self.type_head(queries)  # [B, N, len(ObjectType)]
         type_probs = F.softmax(type_logits, dim=-1)
         object_type = torch.argmax(type_probs, dim=-1)  # [B, N]
+        traj_params[:, :, TrajParamIndex.OBJECT_TYPE] = object_type.float()
         
         # 3. Predict attributes
         attribute_logits = self.attribute_head(queries)  # [B, N, AttributeType.END_OF_INDEX]
         attributes = torch.sigmoid(attribute_logits)  # Each attribute is binary
         
+        # Map attributes to trajectory parameters
+        traj_params[:, :, TrajParamIndex.HAS_OBJECT] = attributes[:, :, AttributeType.HAS_OBJECT]
+        traj_params[:, :, TrajParamIndex.STATIC] = attributes[:, :, AttributeType.STATIC]
+        traj_params[:, :, TrajParamIndex.OCCLUDED] = attributes[:, :, AttributeType.OCCLUDED]
+        
         return {
-            'motion_params': motion_params,
-            'object_type': object_type,
-            'attributes': attributes,
-            'type_logits': type_logits
+            'traj_params': traj_params, # Tensor[B, N, TrajParamIndex.END_OF_INDEX]
+            'type_logits': type_logits # Tensor[B, N, len(ObjectType)]
         }
     
     def forward(self, 
                 features_dict: Dict[SourceCameraId, torch.Tensor],
-                calibrations: Dict[SourceCameraId, Dict],
-                ego_states: torch.Tensor) -> Tuple[List[ObstacleTrajectory], List[Dict]]:
-        """
+                calibrations: Dict[SourceCameraId, torch.Tensor],
+                ego_states: torch.Tensor) -> List[Dict]:
+        """Forward pass to predict trajectories from features.
+        
         Args:
             features_dict: Dict[camera_id -> Tensor[B, T, C, H, W]]
-            calibrations: Dict[camera_id -> calibration_dict]
-            ego_states: Tensor[B, T, 5] containing position, yaw, timestamp
+            calibrations: Dict[camera_id -> Tensor[B, CameraParamIndex.END_OF_INDEX]]
+            ego_states: Tensor[B, T, EgoStateIndex.END_OF_INDEX]
             
         Returns:
-            - Final trajectories list
-            - List of intermediate prediction dicts for auxiliary losses
+            List[Dict]
+                - traj_params: Tensor[B, N, TrajParamIndex.END_OF_INDEX]
+                - type_logits: Tensor[B, N, len(ObjectType)]
         """
         B = next(iter(features_dict.values())).shape[0]
-        T = next(iter(features_dict.values())).shape[1]
-        queries = self.trajectory_queries.expand(B, -1, -1)
+        device = next(iter(features_dict.values())).device
         
-        all_predictions = []
+        # Initialize object queries
+        queries = self.trajectory_queries.repeat(B, 1, 1)  # [B, N, hidden_dim]
         
-        # Iterative refinement
-        for layer_idx, layer in enumerate(self.layers):
-            # 1. Predict trajectory parameters from queries
-            predictions = self.predict_trajectory_parameters(queries) # [B, N, TrajParamIndex.END_OF_INDEX]
-            all_predictions.append(predictions)
+        # List to store all predictions (for auxiliary loss)
+        iterative_predictions = []
+        
+        # Decoder iteratively refines predictions
+        for layer in self.layers:
+            # 1. Predict parameters from current queries
+            predictions = self.predict_trajectory_parameters(queries) 
+            # Dict[traj_params: Tensor[B, N, TrajParamIndex.END_OF_INDEX], type_logits: Tensor[B, N, len(ObjectType)]]
+            iterative_predictions.append(predictions)
             
-            # For the last layer, we don't need to update queries
-            if layer_idx == self.num_layers - 1:
-                break
-                
-            # 2. Sample points on 3D bounding boxes using motion parameters
-            box_points = self.sample_box_points(predictions['motion_params'])  # [B, N, num_points, 3]
+            # 2. Sample points on predicted objects
+            box_points = self.sample_box_points(predictions['traj_params'])  # [B, N, num_points, 3]
             
             # 3. Gather features from all views and frames
             point_features = self.gather_point_features(
-                box_points, features_dict, calibrations, ego_states
+                box_points, predictions['traj_params'], features_dict, calibrations, ego_states
             )  # [B, N, num_points, T, num_cameras, C]
             
             # 4. Aggregate features
@@ -227,97 +239,28 @@ class TrajectoryDecoder(nn.Module):
             # 5. Update queries
             queries = layer(queries, agg_features)
         
-        # Convert final parameters to ObstacleTrajectory objects
-        final_predictions = all_predictions[-1]
-        trajectories = self.params_to_trajectories(
-            final_predictions['motion_params'][0],  # Use first batch
-            final_predictions['object_type'][0],
-            final_predictions['attributes'][0]
-        )
-        
-        return trajectories, all_predictions
+        # Get final predictions
+        iterative_predictions.append(self.predict_trajectory_parameters(queries))  
+         
+        return iterative_predictions
     
-    def params_to_trajectories(self, 
-                             motion_params: torch.Tensor, 
-                             object_types: torch.Tensor,
-                             attributes: torch.Tensor) -> List[ObstacleTrajectory]:
-        """Convert predicted parameters to ObstacleTrajectory objects.
-        
-        Args:
-            motion_params: Tensor[N, TrajParamIndex.END_OF_INDEX]
-            object_types: Tensor[N] - Object type indices
-            attributes: Tensor[N, AttributeType.END_OF_INDEX] - Attribute probabilities
-            
-        Returns:
-            List[ObstacleTrajectory]
-        """
-        trajectories = []
-        
-        # Extract has_object probabilities
-        has_object_probs = attributes[:, AttributeType.HAS_OBJECT]
-        is_static_probs = attributes[:, AttributeType.STATIC]
-        is_occluded_probs = attributes[:, AttributeType.OCCLUDED]
-        
-        # Filter out detections with low confidence
-        valid_mask = has_object_probs > 0.5
-        
-        for i in range(motion_params.shape[0]):
-            if not valid_mask[i]:
-                continue
-                
-            p = motion_params[i]
-            
-            # Create Point3DAccMotion
-            motion = Point3DAccMotion(
-                x=p[TrajParamIndex.X].item(),
-                y=p[TrajParamIndex.Y].item(),
-                z=p[TrajParamIndex.Z].item(),
-                vx=p[TrajParamIndex.VX].item(),
-                vy=p[TrajParamIndex.VY].item(),
-                vz=0.0,
-                ax=p[TrajParamIndex.AX].item(),
-                ay=p[TrajParamIndex.AY].item(),
-                az=0.0
-            )
-            
-            # Get static flag from attributes
-            is_static = bool(is_static_probs[i].item() > 0.5)
-            
-            # Create ObstacleTrajectory
-            traj = ObstacleTrajectory(
-                id=i,
-                motion=motion,
-                yaw=p[TrajParamIndex.YAW].item(),
-                length=p[TrajParamIndex.LENGTH].item(),
-                width=p[TrajParamIndex.WIDTH].item(),
-                height=p[TrajParamIndex.HEIGHT].item(),
-                object_type=ObjectType(object_types[i].item()),
-                static=is_static,
-                valid=True
-            )
-            
-            trajectories.append(traj)
-        
-        return trajectories
-    
-    def sample_box_points(self, motion_params: torch.Tensor) -> torch.Tensor:
+    def sample_box_points(self, traj_params: torch.Tensor) -> torch.Tensor:
         """Sample points on 3D bounding box in object's local coordinate system.
         
         Args:
-            motion_params: Tensor[B, N, TrajParamIndex.END_OF_INDEX]
+            traj_params: Tensor[B, N, TrajParamIndex.END_OF_INDEX]
                 B: batch size
                 N: number of queries
             
         Returns:
             Tensor[B, N, num_points, 3]: Points on box surfaces in object local coordinates
         """
-        B, N = motion_params.shape[:2]
-        device = motion_params.device
+        device = traj_params.device
         
         # Get dimensions
-        length = motion_params[..., TrajParamIndex.LENGTH].unsqueeze(-1)  # [B, N, 1]
-        width = motion_params[..., TrajParamIndex.WIDTH].unsqueeze(-1)    # [B, N, 1]
-        height = motion_params[..., TrajParamIndex.HEIGHT].unsqueeze(-1)  # [B, N, 1]
+        length = traj_params[..., TrajParamIndex.LENGTH].unsqueeze(-1)  # [B, N, 1]
+        width = traj_params[..., TrajParamIndex.WIDTH].unsqueeze(-1)    # [B, N, 1]
+        height = traj_params[..., TrajParamIndex.HEIGHT].unsqueeze(-1)  # [B, N, 1]
         
         # Scale unit cube points by dimensions
         # unit_cube_points: [num_points, 3]
@@ -334,6 +277,7 @@ class TrajectoryDecoder(nn.Module):
     
     def gather_point_features(self, 
                             box_points: torch.Tensor, 
+                            traj_params: torch.Tensor,
                             features_dict: Dict[SourceCameraId, torch.Tensor],
                             calibrations: Dict[SourceCameraId, torch.Tensor],
                             ego_states: torch.Tensor) -> torch.Tensor:
@@ -341,6 +285,7 @@ class TrajectoryDecoder(nn.Module):
         
         Args:
             box_points: Tensor[B, N, num_points, 3]: Points in object local coordinates
+            traj_params: Tensor[B, N, TrajParamIndex.END_OF_INDEX]
             features_dict: Dict[camera_id -> Tensor[B, T, C, H, W]]
             calibrations: Dict[camera_id -> Tensor[B, CameraParamIndex.END_OF_INDEX]]
             ego_states: Tensor[B, T, EgoStateIndex.END_OF_INDEX]
@@ -350,132 +295,138 @@ class TrajectoryDecoder(nn.Module):
         """
         B, N, P = box_points.shape[:3]
         T = next(iter(features_dict.values())).shape[1]
-        C = next(iter(features_dict.values())).shape[2]
         device = box_points.device
         num_cameras = len(features_dict)
         
-        # Store motion parameters for calculations
-        params = self.motion_params
-        
         # Initialize output tensor to store all features
-        all_features = torch.zeros(B, N, P, T, num_cameras, C, device=device)
+        C = next(iter(features_dict.values())).shape[2]  # Feature channels
+        all_point_features = torch.zeros(B, N, P, T, num_cameras, C, device=device)
         
-        # For each time step
+        # For each time step, transform points to global frame, then project to cameras
         for t in range(T):
             # 1. Calculate object positions at time t
-            dt = ego_states[:, t, 4] - ego_states[:, -1, 4]  # Time diff from reference frame
+            dt = ego_states[:, t, EgoStateIndex.TIMESTAMP] - ego_states[:, -1, EgoStateIndex.TIMESTAMP]  # Time diff from reference frame
             dt = dt.unsqueeze(-1).unsqueeze(-1)  # [B, 1, 1]
             
-            # Calculate new center position using motion model (constant acceleration)
-            # x(t) = x0 + v0*t + 0.5*a*t^2
-            pos_x = params[..., TrajParamIndex.X].unsqueeze(-1) + \
-                   params[..., TrajParamIndex.VX].unsqueeze(-1) * dt + \
-                   0.5 * params[..., TrajParamIndex.AX].unsqueeze(-1) * dt * dt
-                   
-            pos_y = params[..., TrajParamIndex.Y].unsqueeze(-1) + \
-                   params[..., TrajParamIndex.VY].unsqueeze(-1) * dt + \
-                   0.5 * params[..., TrajParamIndex.AY].unsqueeze(-1) * dt * dt
-                   
-            pos_z = params[..., TrajParamIndex.Z].unsqueeze(-1)  # Assume constant z
+            # Calculate positions of points at time t
+            # Use trajectory motion model to compute positions
+            world_points = self.transform_points_at_time(box_points, traj_params, ego_states[:, t], dt)
             
-            # Calculate velocity at time t
-            # v(t) = v0 + a*t
-            vel_x = params[..., TrajParamIndex.VX].unsqueeze(-1) + \
-                   params[..., TrajParamIndex.AX].unsqueeze(-1) * dt
-                   
-            vel_y = params[..., TrajParamIndex.VY].unsqueeze(-1) + \
-                   params[..., TrajParamIndex.AY].unsqueeze(-1) * dt
-            
-            # 2. Determine object orientation
-            # Use velocity direction if speed is above threshold, otherwise use predicted yaw
-            speed = torch.sqrt(vel_x*vel_x + vel_y*vel_y)
-            base_yaw = params[..., TrajParamIndex.YAW].unsqueeze(-1)
-            
-            # Calculate yaw from velocity when speed is sufficient
-            vel_yaw = torch.atan2(vel_y, vel_x)
-            
-            # Select yaw based on speed
-            threshold = 0.1
-            yaw = torch.where(speed > threshold, vel_yaw, base_yaw)
-            
-            # 3. Apply local-to-global transform to box points
-            # Rotation matrix (2D rotation around z-axis)
-            cos_yaw = torch.cos(yaw)
-            sin_yaw = torch.sin(yaw)
-            
-            # Apply rotation to all points
-            local_points = box_points.clone()  # [B, N, P, 3]
-            
-            # Rotate points
-            rotated_x = local_points[..., 0] * cos_yaw - local_points[..., 1] * sin_yaw
-            rotated_y = local_points[..., 0] * sin_yaw + local_points[..., 1] * cos_yaw
-            rotated_z = local_points[..., 2]
-            
-            # Concatenate rotated coordinates
-            rotated_points = torch.stack([rotated_x, rotated_y, rotated_z], dim=-1)
-            
-            # Translate to object center
-            global_center = torch.cat([pos_x, pos_y, pos_z], dim=-1)  # [B, N, 3]
-            global_points = rotated_points + global_center.unsqueeze(2)  # [B, N, P, 3]
-            
-            # 4. Transform to ego coordinate system at time t
-            ego_points = self.transform_points_to_ego_frame(
-                global_points, ego_states[:, t]
-            )  # [B, N, P, 3]
-            
-            # 5. Project points to each camera and sample features
-            for camera_idx, (camera_id, features) in enumerate(features_dict.items()):
-                # Get camera features for this timestep
-                features_t = features[:, t]  # [B, C, H, W]
-                feature_H, feature_W = features_t.shape[2:4]
-                
-                # Project points to camera view
+            # Project points to each camera
+            for cam_idx, (camera_id, features) in enumerate(features_dict.items()):
+                # Get calibration parameters
                 calib = calibrations[camera_id]  # [B, CameraParamIndex.END_OF_INDEX]
                 
-                # Use first batch's calibration for image dimensions
-                img_width = calib[0, CameraParamIndex.IMAGE_WIDTH].item()
-                img_height = calib[0, CameraParamIndex.IMAGE_HEIGHT].item()
+                # Project points to image
+                points_2d = self.project_points_to_image(world_points, calib)  # [B, N, P, 2]
                 
-                # Process each batch separately since the calibration can be different
-                for b in range(B):
-                    # Project 3D points to image coordinates
-                    points_2d_b = self.project_points_to_image(
-                        ego_points[b].reshape(N*P, 3),
-                        calib[b],
-                        None,  # extrinsic is now merged into calib tensor
-                        (img_width, img_height)
-                    )  # [N*P, 2] - normalized coordinates (0-1)
-                    
-                    # Convert from 0-1 to [-1, 1] for grid_sample
-                    points_2d_grid = points_2d_b.clone()
-                    points_2d_grid[:, 0] = 2 * points_2d_grid[:, 0] - 1
-                    points_2d_grid[:, 1] = 2 * points_2d_grid[:, 1] - 1
-                    
-                    # Check if points are in image bounds
-                    valid_mask = (
-                        (points_2d_grid[:, 0] >= -1) & (points_2d_grid[:, 0] <= 1) &
-                        (points_2d_grid[:, 1] >= -1) & (points_2d_grid[:, 1] <= 1)
-                    ).float().reshape(N, P, 1)
-                    
-                    # Clamp values to prevent sampling outside
-                    points_2d_grid = torch.clamp(points_2d_grid, -1, 1)
-                    
-                    # Sample features (for single batch)
-                    sampled_feats = F.grid_sample(
-                        features_t[b:b+1],
-                        points_2d_grid.reshape(1, N*P, 1, 2),
-                        mode='bilinear',
-                        align_corners=False
-                    )  # [1, C, N*P, 1]
-                    
-                    # Reshape and apply valid mask
-                    sampled_feats = sampled_feats.reshape(C, N, P).permute(1, 2, 0)  # [N, P, C]
-                    sampled_feats = sampled_feats * valid_mask
-                    
-                    # Store in output tensor
-                    all_features[b, :, :, t, camera_idx] = sampled_feats
+                # Check visibility - points outside [0,1] are considered invisible
+                visible = (
+                    (points_2d[..., 0] >= 0) & 
+                    (points_2d[..., 0] < 1) & 
+                    (points_2d[..., 1] >= 0) & 
+                    (points_2d[..., 1] < 1)
+                )  # [B, N, P]
+                
+                # Sample features at projected points
+                frame_features = features[:, t]  # [B, C, H, W]
+                H, W = frame_features.shape[-2:]
+                
+                # Convert normalized coordinates [0,1] to grid coordinates [-1,1] for grid_sample
+                norm_points = torch.zeros_like(points_2d)
+                norm_points[..., 0] = 2.0 * points_2d[..., 0] - 1.0
+                norm_points[..., 1] = 2.0 * points_2d[..., 1] - 1.0
+                
+                # Reshape for grid_sample
+                grid = norm_points.view(B, N * P, 1, 2)
+                
+                # Sample features
+                sampled = F.grid_sample(
+                    frame_features, grid, mode='bilinear', 
+                    padding_mode='zeros', align_corners=True
+                )  # [B, C, N*P, 1]
+                
+                # Reshape back
+                point_features = sampled.permute(0, 2, 3, 1).view(B, N, P, C)
+                
+                # Set features for invisible points to zero
+                point_features = point_features * visible.unsqueeze(-1).float()
+                
+                # Store in output tensor
+                all_point_features[:, :, :, t, cam_idx] = point_features
         
-        return all_features
+        return all_point_features
+        
+    def transform_points_at_time(self, 
+                               box_points: torch.Tensor, 
+                               traj_params: torch.Tensor,
+                               ego_state: torch.Tensor, 
+                               dt: float) -> torch.Tensor:
+        """Transform box points to world frame at a specific time.
+        
+        Args:
+            box_points: Tensor[B, N, P, 3] - Points in object local coordinates
+            traj_params: Tensor[B, N, TrajParamIndex.END_OF_INDEX] - Trajectory parameters
+            ego_state: Tensor[B, EgoStateIndex.END_OF_INDEX] - Ego vehicle state
+            dt: float - Time difference from current frame
+            
+        Returns:
+            Tensor[B, N, P, 3] - Points in world coordinates at time t
+        """
+        B, N, P = box_points.shape[:3]
+        device = box_points.device
+        
+        # Extract trajectory parameters
+        pos_x = traj_params[..., TrajParamIndex.X].unsqueeze(-1)  # [B, N, 1]
+        pos_y = traj_params[..., TrajParamIndex.Y].unsqueeze(-1)  # [B, N, 1]
+        pos_z = traj_params[..., TrajParamIndex.Z].unsqueeze(-1)  # [B, N, 1]
+        
+        vel_x = traj_params[..., TrajParamIndex.VX].unsqueeze(-1)  # [B, N, 1]
+        vel_y = traj_params[..., TrajParamIndex.VY].unsqueeze(-1)  # [B, N, 1]
+        
+        acc_x = traj_params[..., TrajParamIndex.AX].unsqueeze(-1)  # [B, N, 1]
+        acc_y = traj_params[..., TrajParamIndex.AY].unsqueeze(-1)  # [B, N, 1]
+        
+        yaw = traj_params[..., TrajParamIndex.YAW].unsqueeze(-1)  # [B, N, 1]
+        
+        # Calculate position at time t using motion model (constant acceleration)
+        # x(t) = x0 + v0*t + 0.5*a*t^2
+        pos_x_t = pos_x + vel_x * dt + 0.5 * acc_x * dt * dt
+        pos_y_t = pos_y + vel_y * dt + 0.5 * acc_y * dt * dt
+        pos_z_t = pos_z  # Assume constant height
+        
+        # Calculate velocity at time t
+        # v(t) = v0 + a*t
+        vel_x_t = vel_x + acc_x * dt
+        vel_y_t = vel_y + acc_y * dt
+        
+        # Determine yaw based on velocity or use initial yaw
+        speed_t = torch.sqrt(vel_x_t*vel_x_t + vel_y_t*vel_y_t)
+        
+        # If speed is sufficient, use velocity direction; otherwise use provided yaw
+        yaw_t = torch.where(speed_t > 0.2, torch.atan2(vel_y_t, vel_x_t), yaw)
+        
+        # Calculate rotation matrices
+        cos_yaw = torch.cos(yaw_t)
+        sin_yaw = torch.sin(yaw_t)
+        
+        # Rotate points
+        local_x = box_points[..., 0]
+        local_y = box_points[..., 1]
+        local_z = box_points[..., 2]
+        
+        # Apply rotation
+        global_x = local_x * cos_yaw - local_y * sin_yaw + pos_x_t
+        global_y = local_x * sin_yaw + local_y * cos_yaw + pos_y_t
+        global_z = local_z + pos_z_t
+        
+        # Combine coordinates
+        global_points = torch.stack([global_x, global_y, global_z], dim=-1)
+        
+        # Transform to ego frame
+        ego_points = self.transform_points_to_ego_frame(global_points, ego_state)
+        
+        return ego_points
     
     def transform_points_to_ego_frame(self, 
                                     points: torch.Tensor,
@@ -536,149 +487,230 @@ class TrajectoryDecoder(nn.Module):
         
         return processed_features
 
-    def project_points_to_image(self, 
-                         points_3d: torch.Tensor, 
-                         intrinsic: torch.Tensor, 
-                         extrinsic: torch.Tensor,
-                         image_size: Optional[Tuple[int, int]] = None) -> torch.Tensor:
-        """Project 3D points to image coordinates considering different camera types.
+    def project_points_to_image(self, points_3d: torch.Tensor, calib_params: torch.Tensor) -> torch.Tensor:
+        """Project 3D points to image coordinates.
         
         Args:
-            points_3d: Tensor[N, 3] - 3D points in ego coordinate system
-            intrinsic: Tensor[CameraParamIndex.END_OF_INDEX] - Camera parameters
-            extrinsic: Unused - kept for backward compatibility
-            image_size: Optional tuple (width, height) - If not provided, uses from intrinsic
+            points_3d: Tensor[B, N, P, 3] - Points in ego coordinates
+            calib_params: Tensor[B, CameraParamIndex.END_OF_INDEX] - Camera parameters
             
         Returns:
-            Tensor[N, 2] - 2D pixel coordinates normalized by image dimensions (0 to 1)
+            Tensor[B, N, P, 2] - Points in normalized image coordinates [0,1]
         """
-        device = points_3d.device
+        B, N, P, _ = points_3d.shape
+        
+        # Reshape for batch processing
+        points_flat = points_3d.view(B, N * P, 3)
         
         # Extract camera parameters
-        camera_type = int(intrinsic[CameraParamIndex.CAMERA_TYPE].item())
-        img_width = intrinsic[CameraParamIndex.IMAGE_WIDTH].item()
-        img_height = intrinsic[CameraParamIndex.IMAGE_HEIGHT].item()
-        fx = intrinsic[CameraParamIndex.FX]
-        fy = intrinsic[CameraParamIndex.FY]
-        cx = intrinsic[CameraParamIndex.CX]
-        cy = intrinsic[CameraParamIndex.CY]
+        camera_type = calib_params[:, CameraParamIndex.CAMERA_TYPE].long()
         
-        # Override image size if provided
-        if image_size is not None:
-            img_width, img_height = image_size
+        # Get intrinsic parameters
+        fx = calib_params[:, CameraParamIndex.FX].unsqueeze(1)  # [B, 1]
+        fy = calib_params[:, CameraParamIndex.FY].unsqueeze(1)  # [B, 1]
+        cx = calib_params[:, CameraParamIndex.CX].unsqueeze(1)  # [B, 1]
+        cy = calib_params[:, CameraParamIndex.CY].unsqueeze(1)  # [B, 1]
         
         # Distortion parameters
-        k1 = intrinsic[CameraParamIndex.K1]
-        k2 = intrinsic[CameraParamIndex.K2]
-        k3 = intrinsic[CameraParamIndex.K3]
-        k4 = intrinsic[CameraParamIndex.K4]
-        p1 = intrinsic[CameraParamIndex.P1]
-        p2 = intrinsic[CameraParamIndex.P2]
+        k1 = calib_params[:, CameraParamIndex.K1].unsqueeze(1)  # [B, 1]
+        k2 = calib_params[:, CameraParamIndex.K2].unsqueeze(1)  # [B, 1]
+        k3 = calib_params[:, CameraParamIndex.K3].unsqueeze(1)  # [B, 1]
+        k4 = calib_params[:, CameraParamIndex.K4].unsqueeze(1)  # [B, 1]
+        p1 = calib_params[:, CameraParamIndex.P1].unsqueeze(1)  # [B, 1]
+        p2 = calib_params[:, CameraParamIndex.P2].unsqueeze(1)  # [B, 1]
+        
+        # Get image dimensions
+        img_width = calib_params[:, CameraParamIndex.IMAGE_WIDTH].unsqueeze(1)  # [B, 1]
+        img_height = calib_params[:, CameraParamIndex.IMAGE_HEIGHT].unsqueeze(1)  # [B, 1]
+        
+        # Get extrinsic parameters (quaternion + translation)
+        qw = calib_params[:, CameraParamIndex.QW].unsqueeze(1)  # [B, 1]
+        qx = calib_params[:, CameraParamIndex.QX].unsqueeze(1)  # [B, 1]
+        qy = calib_params[:, CameraParamIndex.QY].unsqueeze(1)  # [B, 1]
+        qz = calib_params[:, CameraParamIndex.QZ].unsqueeze(1)  # [B, 1]
+        tx = calib_params[:, CameraParamIndex.X].unsqueeze(1)  # [B, 1]
+        ty = calib_params[:, CameraParamIndex.Y].unsqueeze(1)  # [B, 1]
+        tz = calib_params[:, CameraParamIndex.Z].unsqueeze(1)  # [B, 1]
         
         # Convert quaternion to rotation matrix
-        qw = intrinsic[CameraParamIndex.QW]
-        qx = intrinsic[CameraParamIndex.QX]
-        qy = intrinsic[CameraParamIndex.QY]
-        qz = intrinsic[CameraParamIndex.QZ]
+        # Using the quaternion to rotation matrix formula
+        r00 = 1 - 2 * (qy * qy + qz * qz)
+        r01 = 2 * (qx * qy - qz * qw)
+        r02 = 2 * (qx * qz + qy * qw)
         
-        # Quaternion to rotation matrix
-        R = torch.zeros(3, 3, device=device)
-        R[0, 0] = 1 - 2*qy*qy - 2*qz*qz
-        R[0, 1] = 2*qx*qy - 2*qz*qw
-        R[0, 2] = 2*qx*qz + 2*qy*qw
-        R[1, 0] = 2*qx*qy + 2*qz*qw
-        R[1, 1] = 1 - 2*qx*qx - 2*qz*qz
-        R[1, 2] = 2*qy*qz - 2*qx*qw
-        R[2, 0] = 2*qx*qz - 2*qy*qw
-        R[2, 1] = 2*qy*qz + 2*qx*qw
-        R[2, 2] = 1 - 2*qx*qx - 2*qy*qy
+        r10 = 2 * (qx * qy + qz * qw)
+        r11 = 1 - 2 * (qx * qx + qz * qz)
+        r12 = 2 * (qy * qz - qx * qw)
         
-        # Translation vector
-        t = torch.tensor([
-            intrinsic[CameraParamIndex.X], 
-            intrinsic[CameraParamIndex.Y], 
-            intrinsic[CameraParamIndex.Z]
-        ], device=device)
+        r20 = 2 * (qx * qz - qy * qw)
+        r21 = 2 * (qy * qz + qx * qw)
+        r22 = 1 - 2 * (qx * qx + qy * qy)
         
-        # Transform points from ego to camera coordinate system
-        # R_cw @ (p - t)
-        points_cam = torch.matmul(points_3d - t, R.T)
+        # Apply rotation and translation
+        x = points_flat[..., 0].unsqueeze(-1)  # [B, N*P, 1]
+        y = points_flat[..., 1].unsqueeze(-1)  # [B, N*P, 1]
+        z = points_flat[..., 2].unsqueeze(-1)  # [B, N*P, 1]
         
-        # Points behind the camera
-        behind_camera = (points_cam[:, 2] <= 0)
+        # Transform points from ego to camera coordinates
+        x_cam = r00 * x + r01 * y + r02 * z + tx
+        y_cam = r10 * x + r11 * y + r12 * z + ty
+        z_cam = r20 * x + r21 * y + r22 * z + tz
         
-        # Normalized coordinates (x/z, y/z)
+        # Check if points are behind the camera
+        behind_camera = (z_cam <= 0).squeeze(-1)  # [B, N*P]
+        
         # Handle division by zero
-        z = points_cam[:, 2:3]
-        z = torch.where(z == 0, torch.ones_like(z) * 1e-10, z)
-        x_normalized = points_cam[:, 0:1] / z
-        y_normalized = points_cam[:, 1:2] / z
+        z_cam = torch.where(z_cam == 0, torch.ones_like(z_cam) * 1e-10, z_cam)
         
-        # Apply different camera models based on camera type
-        if camera_type == CameraType.PINHOLE:
-            # Ideal pinhole camera model without distortion
-            x_distorted = x_normalized
-            y_distorted = y_normalized
+        # Normalize coordinates
+        x_normalized = x_cam / z_cam
+        y_normalized = y_cam / z_cam
+        
+        # Apply camera model based on camera type
+        if torch.unique(camera_type).shape[0] == 1:
+            # If all cameras are of the same type, avoid branching
+            camera_type_value = camera_type[0].item()
             
-        elif camera_type == CameraType.GENERAL_DISTORT:
-            # Standard pinhole camera model with radial and tangential distortion
-            r2 = x_normalized * x_normalized + y_normalized * y_normalized
-            r4 = r2 * r2
-            r6 = r4 * r2
-            
-            # Radial distortion
-            radial = 1.0 + k1 * r2 + k2 * r4 + k3 * r6
-            
-            # Tangential distortion
-            dx_tangential = 2 * p1 * x_normalized * y_normalized + p2 * (r2 + 2 * x_normalized * x_normalized)
-            dy_tangential = p1 * (r2 + 2 * y_normalized * y_normalized) + 2 * p2 * x_normalized * y_normalized
-            
-            # Apply distortion
-            x_distorted = x_normalized * radial + dx_tangential
-            y_distorted = y_normalized * radial + dy_tangential
-            
-        elif camera_type == CameraType.FISHEYE:
-            # Fisheye camera model
-            r = torch.sqrt(x_normalized * x_normalized + y_normalized * y_normalized)
-            
-            # Handle zero radius
-            r = torch.where(r == 0, torch.ones_like(r) * 1e-10, r)
-            
-            # Compute theta (angle from optical axis)
-            theta = torch.atan(r)
-            theta2 = theta * theta
-            theta4 = theta2 * theta2
-            theta6 = theta4 * theta2
-            theta8 = theta4 * theta4
-            
-            # Apply distortion model
-            theta_d = theta * (1 + k1 * theta2 + k2 * theta4 + k3 * theta6 + k4 * theta8)
-            
-            # Scale factors
-            scaling = torch.where(r > 0, theta_d / r, torch.ones_like(r))
-            
-            # Apply scaling
-            x_distorted = x_normalized * scaling
-            y_distorted = y_normalized * scaling
-            
+            if camera_type_value == CameraType.UNKNOWN:
+                # Default model with no distortion
+                x_distorted = x_normalized
+                y_distorted = y_normalized
+                
+            elif camera_type_value == CameraType.PINHOLE:
+                # Standard pinhole camera model with radial and tangential distortion
+                r2 = x_normalized * x_normalized + y_normalized * y_normalized
+                r4 = r2 * r2
+                r6 = r4 * r2
+                
+                # Radial distortion
+                radial = 1 + k1 * r2 + k2 * r4 + k3 * r6
+                
+                # Tangential distortion
+                dx = 2 * p1 * x_normalized * y_normalized + p2 * (r2 + 2 * x_normalized * x_normalized)
+                dy = p1 * (r2 + 2 * y_normalized * y_normalized) + 2 * p2 * x_normalized * y_normalized
+                
+                # Apply distortion
+                x_distorted = x_normalized * radial + dx
+                y_distorted = y_normalized * radial + dy
+                
+            elif camera_type_value == CameraType.FISHEYE:
+                # Fisheye camera model
+                r = torch.sqrt(x_normalized * x_normalized + y_normalized * y_normalized)
+                
+                # Handle zero radius
+                r = torch.where(r == 0, torch.ones_like(r) * 1e-10, r)
+                
+                # Compute theta (angle from optical axis)
+                theta = torch.atan(r)
+                theta2 = theta * theta
+                theta4 = theta2 * theta2
+                theta6 = theta4 * theta2
+                theta8 = theta4 * theta4
+                
+                # Apply distortion model
+                theta_d = theta * (1 + k1 * theta2 + k2 * theta4 + k3 * theta6 + k4 * theta8)
+                
+                # Scale factors
+                scaling = torch.where(r > 0, theta_d / r, torch.ones_like(r))
+                
+                # Apply scaling
+                x_distorted = x_normalized * scaling
+                y_distorted = y_normalized * scaling
+                
+            elif camera_type_value == CameraType.GENERAL_DISTORT:
+                # Same as pinhole with distortion
+                r2 = x_normalized * x_normalized + y_normalized * y_normalized
+                r4 = r2 * r2
+                r6 = r4 * r2
+                
+                # Radial distortion
+                radial = 1 + k1 * r2 + k2 * r4 + k3 * r6
+                
+                # Tangential distortion
+                dx = 2 * p1 * x_normalized * y_normalized + p2 * (r2 + 2 * x_normalized * x_normalized)
+                dy = p1 * (r2 + 2 * y_normalized * y_normalized) + 2 * p2 * x_normalized * y_normalized
+                
+                # Apply distortion
+                x_distorted = x_normalized * radial + dx
+                y_distorted = y_normalized * radial + dy
+                
+            else:
+                # Default to pinhole without distortion
+                x_distorted = x_normalized
+                y_distorted = y_normalized
         else:
-            # Default to pinhole without distortion
-            x_distorted = x_normalized
-            y_distorted = y_normalized
+            # Handle mixed camera types in batch (less efficient)
+            x_distorted = torch.zeros_like(x_normalized)
+            y_distorted = torch.zeros_like(y_normalized)
+            
+            for b in range(B):
+                if camera_type[b] == CameraType.UNKNOWN:
+                    x_distorted[b] = x_normalized[b]
+                    y_distorted[b] = y_normalized[b]
+                
+                elif camera_type[b] == CameraType.PINHOLE:
+                    r2 = x_normalized[b] * x_normalized[b] + y_normalized[b] * y_normalized[b]
+                    r4 = r2 * r2
+                    r6 = r4 * r2
+                    
+                    radial = 1 + k1[b] * r2 + k2[b] * r4 + k3[b] * r6
+                    
+                    dx = 2 * p1[b] * x_normalized[b] * y_normalized[b] + p2[b] * (r2 + 2 * x_normalized[b] * x_normalized[b])
+                    dy = p1[b] * (r2 + 2 * y_normalized[b] * y_normalized[b]) + 2 * p2[b] * x_normalized[b] * y_normalized[b]
+                    
+                    x_distorted[b] = x_normalized[b] * radial + dx
+                    y_distorted[b] = y_normalized[b] * radial + dy
+                
+                elif camera_type[b] == CameraType.FISHEYE:
+                    r = torch.sqrt(x_normalized[b] * x_normalized[b] + y_normalized[b] * y_normalized[b])
+                    r = torch.where(r == 0, torch.ones_like(r) * 1e-10, r)
+                    
+                    theta = torch.atan(r)
+                    theta2 = theta * theta
+                    theta4 = theta2 * theta2
+                    theta6 = theta4 * theta2
+                    theta8 = theta4 * theta4
+                    
+                    theta_d = theta * (1 + k1[b] * theta2 + k2[b] * theta4 + k3[b] * theta6 + k4[b] * theta8)
+                    scaling = torch.where(r > 0, theta_d / r, torch.ones_like(r))
+                    
+                    x_distorted[b] = x_normalized[b] * scaling
+                    y_distorted[b] = y_normalized[b] * scaling
+                
+                elif camera_type[b] == CameraType.GENERAL_DISTORT:
+                    r2 = x_normalized[b] * x_normalized[b] + y_normalized[b] * y_normalized[b]
+                    r4 = r2 * r2
+                    r6 = r4 * r2
+                    
+                    radial = 1 + k1[b] * r2 + k2[b] * r4 + k3[b] * r6
+                    
+                    dx = 2 * p1[b] * x_normalized[b] * y_normalized[b] + p2[b] * (r2 + 2 * x_normalized[b] * x_normalized[b])
+                    dy = p1[b] * (r2 + 2 * y_normalized[b] * y_normalized[b]) + 2 * p2[b] * x_normalized[b] * y_normalized[b]
+                    
+                    x_distorted[b] = x_normalized[b] * radial + dx
+                    y_distorted[b] = y_normalized[b] * radial + dy
+                
+                else:
+                    x_distorted[b] = x_normalized[b]
+                    y_distorted[b] = y_normalized[b]
         
         # Apply camera matrix
         x_pixel = fx * x_distorted + cx
         y_pixel = fy * y_distorted + cy
         
-        # Normalize to [0, 1]
+        # Normalize to [0, 1] for consistency with the visibility check in gather_point_features
         x_norm = x_pixel / img_width
         y_norm = y_pixel / img_height
         
         # Combine coordinates
-        points_2d = torch.cat([x_norm, y_norm], dim=1)
+        points_2d = torch.cat([x_norm, y_norm], dim=-1)
         
-        # Mark behind-camera points as invalid
-        points_2d[behind_camera] = -2.0  # Outside of normalized range
+        # Reshape back to original dimensions
+        points_2d = points_2d.view(B, N, P, 2)
+        
+        # Mark behind-camera points as invalid (set to a value outside [0,1])
+        behind_camera = behind_camera.view(B, N, P)
+        points_2d[behind_camera] = -2.0
         
         return points_2d
 
@@ -765,14 +797,20 @@ class E2EPerceptionNet(nn.Module):
             feature_dim=feature_dim
         )
     
-    def forward(self, batch: Dict) -> Dict:
-        """Forward pass returning trajectories and auxiliary outputs for training.
+    def forward(self, batch: Dict) -> List[Dict]:
+        """Forward pass for end-to-end perception.
         
         Args:
             batch: Dict containing:
-                - images: Dict[camera_id -> Tensor[B, T, 3, H, W]]
-                - calibrations: Dict[camera_id -> Tensor[B, CameraParamIndex.END_OF_INDEX]]
+                - images: Dict[SourceCameraId -> Tensor[B, T, C, H, W]]
+                - calibrations: Dict[SourceCameraId -> Tensor[B, CameraParamIndex.END_OF_INDEX]]
                 - ego_states: Tensor[B, T, EgoStateIndex.END_OF_INDEX]
+                
+        Returns:
+            iterative_predictions: List[Dict]
+                - traj_params: Tensor[B, N, TrajParamIndex.END_OF_INDEX]
+                - type_logits: Tensor[B, N, len(ObjectType)]
+            
         """
         # Extract features from each camera
         features = {}
@@ -790,14 +828,4 @@ class E2EPerceptionNet(nn.Module):
             # Store fused features
             features[camera_id] = fused_feat
         
-        # Decode trajectories using fused features from all cameras
-        trajectories, aux_trajectories = self.trajectory_decoder(
-            features,
-            batch['calibrations'],
-            batch['ego_states']
-        )
-        
-        return {
-            'trajectories': trajectories,
-            'aux_trajectories': aux_trajectories
-        }
+        return self.trajectory_decoder(features, batch['calibrations'], batch['ego_states'])
