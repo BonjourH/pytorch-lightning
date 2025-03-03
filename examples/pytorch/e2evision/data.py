@@ -168,10 +168,10 @@ class MultiFrameDataset(Dataset):
                             traj[TrajParamIndex.X] = obj_data.get('x', 0.0)
                             traj[TrajParamIndex.Y] = obj_data.get('y', 0.0)
                             traj[TrajParamIndex.Z] = obj_data.get('z', 0.0)
-                            traj[TrajParamIndex.VX] = obj_data.get('vx', 0.0)
-                            traj[TrajParamIndex.VY] = obj_data.get('vy', 0.0)
-                            traj[TrajParamIndex.AX] = 0.0
-                            traj[TrajParamIndex.AY] = 0.0
+                            traj[TrajParamIndex.VX] = obj_data.get('rel_vx', 0.0)
+                            traj[TrajParamIndex.VY] = obj_data.get('rel_vy', 0.0)
+                            traj[TrajParamIndex.AX] = obj_data.get('rel_ax', 0.0)
+                            traj[TrajParamIndex.AY] = obj_data.get('rel_ay', 0.0)
                             traj[TrajParamIndex.YAW] = obj_data.get('yaw', 0.0)
                             traj[TrajParamIndex.LENGTH] = obj_data.get('length', 0.0)
                             traj[TrajParamIndex.WIDTH] = obj_data.get('width', 0.0)
