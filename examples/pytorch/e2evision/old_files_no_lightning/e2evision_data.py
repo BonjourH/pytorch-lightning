@@ -10,10 +10,12 @@ from enum import IntEnum
 from base import (
     SourceCameraId, CameraType, ObjectType,
     TrajParamIndex, CameraParamIndex,
-    EgoStateIndex, MAX_TRAJ_NB
+    EgoStateIndex
 )
 import numpy as np
 
+
+MAX_TRAJ_NB = 128
 
 class TrainingSample:
     """Container for multi-frame training data."""

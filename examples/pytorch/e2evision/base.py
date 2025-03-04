@@ -114,7 +114,6 @@ class TrajParamIndex(IntEnum):
     OBJECT_TYPE = 14
     END_OF_INDEX = 15
 
-MAX_TRAJ_NB = 128
 
 @dataclass
 class Point3DAccMotion:
