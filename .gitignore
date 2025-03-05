@@ -209,3 +209,4 @@ _notebooks/.notebooks/
 
 tb_logs/
 
+*checkpoint*

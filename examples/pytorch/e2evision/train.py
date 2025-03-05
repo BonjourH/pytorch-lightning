@@ -7,7 +7,7 @@ import warnings
 
 from base import SourceCameraId
 from models.module import E2EPerceptionModule
-from data.datamodule import E2EPerceptionDataModule
+from e2e_dataset.datamodule import E2EPerceptionDataModule
 from utils.visualization import Visualizer
 
 def parse_args():
@@ -16,12 +16,12 @@ def parse_args():
     # Data arguments
     parser.add_argument('--train-list', type=str, required=True, help='Path to train clip list')
     parser.add_argument('--val-list', type=str, required=True, help='Path to validation clip list')
-    parser.add_argument('--batch-size', type=int, default=2, help='Batch size')
+    parser.add_argument('--batch-size', type=int, default=1, help='Batch size')
     parser.add_argument('--num-workers', type=int, default=4, help='Number of data loading workers')
     
     # Model arguments
     parser.add_argument('--feature-dim', type=int, default=256, help='Feature dimension')
-    parser.add_argument('--num-queries', type=int, default=100, help='Number of object queries')
+    parser.add_argument('--num-queries', type=int, default=64, help='Number of object queries')
     parser.add_argument('--num-decoder-layers', type=int, default=6, help='Number of decoder layers')
     
     # Training arguments
