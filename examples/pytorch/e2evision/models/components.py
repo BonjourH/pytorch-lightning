@@ -47,42 +47,6 @@ class ImageFeatureExtractor(nn.Module):
         x = self.channel_adjust(x)
         return x
 
-class TemporalAttentionFusion(nn.Module):
-    """Temporal attention fusion module."""
-    def __init__(self, feature_dim: int, num_heads: int = 8, dropout: float = 0.1):
-        super().__init__()
-        self.attention = nn.MultiheadAttention(
-            embed_dim=feature_dim,
-            num_heads=num_heads,
-            dropout=dropout,
-            batch_first=True
-        )
-        self.norm = nn.LayerNorm(feature_dim)
-        
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            x: Input features [B, T, C, H, W]
-        Returns:
-            Fused features [B, C, H, W]
-        """
-        B, T, C, H, W = x.shape
-        
-        # Reshape for attention
-        x = x.reshape(B, T, C * H * W).contiguous()
-        
-        # Self attention
-        attn_out, _ = self.attention(x, x, x)
-        
-        # Add & norm
-        x = self.norm(x + attn_out)
-        
-        # Reshape and mean over time
-        x = x.reshape(B, T, C, H, W)
-        x = x.mean(dim=1)
-        
-        return x
-
 class TrajectoryRefinementLayer(nn.Module):
     """Layer for refining trajectory queries."""
     def __init__(self, hidden_dim: int, num_heads: int = 8):

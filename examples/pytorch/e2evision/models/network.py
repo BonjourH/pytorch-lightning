@@ -4,7 +4,8 @@ from typing import Dict, List, Optional
 import numpy as np
 
 from base import SourceCameraId, TrajParamIndex, ObjectType, AttributeType, CameraParamIndex, EgoStateIndex
-from .components import ImageFeatureExtractor, TemporalAttentionFusion, TrajectoryDecoderLayer
+from .components import ImageFeatureExtractor, TrajectoryDecoderLayer
+from .temporal_fusion_layer import TemporalFusionFactory
 
 class TrajectoryDecoder(nn.Module):
     """Decode trajectories from features."""
@@ -725,7 +726,7 @@ class E2EPerceptionNet(nn.Module):
         })
         
         # Temporal fusion for each camera
-        self.temporal_fusion = TemporalAttentionFusion(feature_dim)
+        self.temporal_fusion = TemporalFusionFactory.create(strategy='average')
         
         # Trajectory decoder
         self.decoder = TrajectoryDecoder(
