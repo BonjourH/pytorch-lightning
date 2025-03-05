@@ -7,11 +7,15 @@ from base import SourceCameraId, ObjectType, TrajParamIndex
 
 class ImageFeatureExtractor(nn.Module):
     """Image feature extraction module."""
-    def __init__(self, out_channels: int = 256):
+    def __init__(self, out_channels: int = 256, use_pretrained: bool = False):
         super().__init__()
         
-        # Use ResNet50 as backbone with updated weights parameter
-        resnet = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
+        # Use ResNet50 as backbone with weights parameter based on use_pretrained flag
+        if use_pretrained:
+            resnet = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
+        else:
+            # Skip downloading weights if not using pretrained
+            resnet = models.resnet50(weights=None)
         
         # Remove classification head
         self.backbone = nn.Sequential(*list(resnet.children())[:-2])

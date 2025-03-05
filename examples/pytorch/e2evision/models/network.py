@@ -712,13 +712,14 @@ class E2EPerceptionNet(nn.Module):
                  camera_ids: List[SourceCameraId],
                  feature_dim: int = 256,
                  num_queries: int = 100,
-                 num_decoder_layers: int = 6):
+                 num_decoder_layers: int = 6,
+                 use_pretrained: bool = False):
         super().__init__()
         self.camera_ids = camera_ids
         
         # Create feature extractors for each camera
         self.feature_extractors = nn.ModuleDict({
-            str(camera_id.value): ImageFeatureExtractor(feature_dim)
+            str(camera_id.value): ImageFeatureExtractor(feature_dim, use_pretrained=use_pretrained)
             for camera_id in camera_ids
         })
         

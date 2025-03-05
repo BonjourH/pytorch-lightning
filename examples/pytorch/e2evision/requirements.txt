@@ -1,0 +1,12 @@
+torch
+torchvision
+torchaudio
+lightning
+scipy
+matplotlib
+seaborn
+scikit-learn
+opencv-python
+tqdm
+wandb
+tensorboard

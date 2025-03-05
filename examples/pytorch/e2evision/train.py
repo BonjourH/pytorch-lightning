@@ -35,6 +35,9 @@ def parse_args():
     parser.add_argument('--devices', type=int, default=1, help='Number of devices to use')
     parser.add_argument('--precision', type=str, default='32-true', help='Precision for training')
     
+    # Pretrained weights argument
+    parser.add_argument('--pretrained-weights', action='store_true', help='Use pretrained weights (requires internet connection)')
+    
     # Logging arguments
     parser.add_argument('--experiment-name', type=str, default='e2e_perception', help='Name of the experiment')
     parser.add_argument('--save-dir', type=str, default='checkpoints', help='Directory to save outputs')
@@ -73,7 +76,8 @@ def main():
         num_decoder_layers=args.num_decoder_layers,
         learning_rate=args.learning_rate,
         weight_decay=args.weight_decay,
-        max_epochs=args.max_epochs
+        max_epochs=args.max_epochs,
+        use_pretrained=args.pretrained_weights
     )
     
     # Create loggers

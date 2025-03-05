@@ -1,4 +1,0 @@
-/home/xinjian/Code/VAutoLabelerCore/labeling_info/1_20231219T122348_pdb-l4e-c0011_0_0to8
-/home/xinjian/Code/VAutoLabelerCore/labeling_info/3_20240117T084829_pdb-l4e-b0005_10_792to812
-/home/xinjian/Code/VAutoLabelerCore/labeling_info/4_20240223T161731_pdb-l4e-b0001_4_197to207
-/home/xinjian/Code/VAutoLabelerCore/labeling_info/5_20240223T161731_pdb-l4e-b0001_4_159to169

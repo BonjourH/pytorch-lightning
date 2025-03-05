@@ -19,7 +19,8 @@ class E2EPerceptionModule(L.LightningModule):
                  num_decoder_layers: int = 6,
                  learning_rate: float = 1e-4,
                  weight_decay: float = 1e-4,
-                 max_epochs: int = 100):
+                 max_epochs: int = 100,
+                 use_pretrained: bool = False):
         super().__init__()
         self.save_hyperparameters(ignore=['camera_ids'])
         
@@ -28,7 +29,8 @@ class E2EPerceptionModule(L.LightningModule):
             camera_ids=camera_ids,
             feature_dim=feature_dim,
             num_queries=num_queries,
-            num_decoder_layers=num_decoder_layers
+            num_decoder_layers=num_decoder_layers,
+            use_pretrained=use_pretrained
         )
         
         # Create loss function
