@@ -150,6 +150,7 @@ class MultiFrameDataset(Dataset):
                     
                     # Collect Ego State
                     ego_state = torch.zeros(EgoStateIndex.END_OF_INDEX)
+                    ego_state[EgoStateIndex.TIMESTAMP] = ego_states[i].get('timestamp', 0.0)
                     ego_state[EgoStateIndex.X] = ego_states[i].get('x', 0.0)
                     ego_state[EgoStateIndex.Y] = ego_states[i].get('y', 0.0)
                     ego_state[EgoStateIndex.YAW] = ego_states[i].get('yaw', 0.0)

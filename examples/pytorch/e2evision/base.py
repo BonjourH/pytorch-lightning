@@ -56,16 +56,17 @@ class CameraParamIndex(IntEnum):
 
 # EGO STATE RELATED
 class EgoStateIndex(IntEnum):
-    X = 0
-    Y = 1
-    YAW = 2
-    PITCH_CORRECTION = 3
-    VX = 4
-    VY = 5
-    AX = 6
-    AY = 7
-    YAW_RATE = 8
-    END_OF_INDEX = 9    
+    TIMESTAMP = 0
+    X = 1
+    Y = 2
+    YAW = 3
+    PITCH_CORRECTION = 4
+    VX = 5
+    VY = 6
+    AX = 7
+    AY = 8
+    YAW_RATE = 9
+    END_OF_INDEX = 10    
     
 # OBSTACLE RELATED 
 class AttributeType(IntEnum):

@@ -1,7 +1,6 @@
 from .components import (
     ImageFeatureExtractor,
-    TrajectoryRefinementLayer,
-    TrajectoryDecoderLayer,
+    TrajectoryQueryRefineLayer,
     TrajectoryDecoder
 )
 from .network import E2EPerceptionNet
@@ -10,8 +9,7 @@ from .temporal_fusion_layer import TemporalFusionFactory
 
 __all__ = [
     'ImageFeatureExtractor',
-    'TrajectoryRefinementLayer',
-    'TrajectoryDecoderLayer',
+    'TrajectoryQueryRefineLayer',
     'TrajectoryDecoder',
     'E2EPerceptionNet',
     'E2EPerceptionModule',

@@ -3,6 +3,7 @@ import torch.nn as nn
 import torchvision.models as models
 from typing import Dict, Optional, List
 import numpy as np
+import torch.nn.functional as F
 
 from base import SourceCameraId, ObjectType, TrajParamIndex, AttributeType, CameraParamIndex, EgoStateIndex
 
@@ -48,61 +49,8 @@ class ImageFeatureExtractor(nn.Module):
         x = self.channel_adjust(x)
         return x
 
-class TrajectoryRefinementLayer(nn.Module):
-    """Layer for refining trajectory queries."""
-    def __init__(self, hidden_dim: int, num_heads: int = 8):
-        super().__init__()
-        
-        # Self-attention
-        self.self_attn = nn.MultiheadAttention(
-            embed_dim=hidden_dim,
-            num_heads=num_heads,
-            batch_first=True
-        )
-        
-        # Feature attention
-        self.feature_attn = nn.MultiheadAttention(
-            embed_dim=hidden_dim,
-            num_heads=num_heads,
-            batch_first=True
-        )
-        
-        # FFN
-        self.ffn = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim * 4),
-            nn.ReLU(),
-            nn.Linear(hidden_dim * 4, hidden_dim)
-        )
-        
-        # Layer norms
-        self.norm1 = nn.LayerNorm(hidden_dim)
-        self.norm2 = nn.LayerNorm(hidden_dim)
-        self.norm3 = nn.LayerNorm(hidden_dim)
-        
-    def forward(self, queries: torch.Tensor, features: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            queries: Tensor[B, N, hidden_dim]
-            features: Tensor[B, N, hidden_dim]
-            
-        Returns:
-            Tensor[B, N, hidden_dim]
-        """
-        # Self-attention
-        q = self.norm1(queries)
-        q = q + self.self_attn(q, q, q)[0]
-        
-        # Feature attention
-        q = self.norm2(q)
-        q = q + self.feature_attn(q, features, features)[0]
-        
-        # FFN
-        q = self.norm3(q)
-        q = q + self.ffn(q)
-        
-        return q
 
-class TrajectoryDecoderLayer(nn.Module):
+class TrajectoryQueryRefineLayer(nn.Module):
     """Single layer of trajectory decoder."""
     def __init__(self, feature_dim: int, num_heads: int = 8, dim_feedforward: int = 2048):
         super().__init__()
@@ -164,41 +112,27 @@ class TrajectoryDecoder(nn.Module):
                  num_points: int = 25): # Points to sample per face of the unit cube
         super().__init__()
         
+        query_dim = feature_dim
+        
         # Object queries
-        self.queries = nn.Parameter(torch.randn(num_queries, feature_dim))
+        self.queries = nn.Parameter(torch.randn(num_queries, query_dim))
         
         # Query position encoding
-        self.query_pos = nn.Parameter(torch.randn(num_queries, feature_dim))
+        self.query_pos = nn.Parameter(torch.randn(num_queries, query_dim))
         
         # Sample points on unit cube for feature gathering
-        self.register_buffer('unit_points', self._generate_unit_cube_points(num_points))
+        unit_points = self._generate_unit_cube_points(num_points)
+        self.register_buffer('unit_points', unit_points)
         
         # Parameter ranges for normalization: torch.Tensor[TrajParamIndex.HEIGHT + 1, 2]
         ranges = self._get_motion_param_range()
         self.register_buffer('motion_min_vals', ranges[:, 0])
         self.register_buffer('motion_ranges', ranges[:, 1] - ranges[:, 0])
-        
-        # Feature fusion layers
-        self.feat_fusion = nn.Sequential(
-            nn.Linear(feature_dim * num_points, feature_dim * 2),
-            nn.LayerNorm(feature_dim * 2),
-            nn.ReLU(),
-            nn.Linear(feature_dim * 2, feature_dim)
-        )
-        
-        # Decoder layers
-        self.layers = nn.ModuleList([
-            TrajectoryDecoderLayer(
-                feature_dim=feature_dim,
-                num_heads=8,
-                dim_feedforward=hidden_dim
-            ) for _ in range(num_layers)
-        ])
-        
-        # HEAD PART
+         
+        # QUERY TO TRAJECTORY PARAMETERS PART
         # 1. Motion parameter head - predict normalized 0-1 values for motion & size
         self.motion_head = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim),
+            nn.Linear(query_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, TrajParamIndex.HEIGHT + 1),
             nn.Sigmoid()  # Output normalized 0-1 values
@@ -206,17 +140,34 @@ class TrajectoryDecoder(nn.Module):
         
         # 2. Object type classification head
         self.type_head = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim),
+            nn.Linear(query_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, len(ObjectType))
         )
         
         # 3. Attribute prediction head
         self.attribute_head = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim),
+            nn.Linear(query_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, AttributeType.END_OF_INDEX)
         )
+        
+        # Reprojected Points Feature fusion layers
+        self.feature_mlp = nn.Sequential(
+            nn.Linear(feature_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, feature_dim),
+            nn.LayerNorm(feature_dim)
+        )
+        
+        # Decoder layers
+        self.layers = nn.ModuleList([
+            TrajectoryQueryRefineLayer(
+                feature_dim=feature_dim,
+                num_heads=8,
+                dim_feedforward=hidden_dim
+            ) for _ in range(num_layers)
+        ])
          
         # Initialize parameters
         for p in self.parameters():
@@ -360,7 +311,7 @@ class TrajectoryDecoder(nn.Module):
         """
         B, N, C = queries.shape
         
-        traj_params = torch.zeros(B, N, TrajParamIndex.END_OF_INDEX)
+        traj_params = torch.zeros(B, N, TrajParamIndex.END_OF_INDEX).to(queries.device)
         
         # 1. Predict motion parameters (normalized 0-1)
         norm_params = self.motion_head(queries)  # [B, N, TrajParamIndex.HEIGHT + 1]
@@ -395,7 +346,6 @@ class TrajectoryDecoder(nn.Module):
         Returns:
             Tensor[B, N, num_points, 3]: Points on box surfaces in object local coordinates
         """
-        device = traj_params.device
         
         # Get dimensions
         length = traj_params[..., TrajParamIndex.LENGTH].unsqueeze(-1)  # [B, N, 1]
@@ -407,7 +357,7 @@ class TrajectoryDecoder(nn.Module):
         # dims: [B, N, 3]
         dims = torch.stack([length, width, height], dim=-1)  # [B, N, 3]
          
-        # Scale unit cube points by dimensions
+        # Scale unit cube points by dimensions and ensure same device
         box_points = self.unit_points.unsqueeze(0).unsqueeze(0) * dims.unsqueeze(2)  # [B, N, num_points, 3]
         
         return box_points
@@ -432,12 +382,11 @@ class TrajectoryDecoder(nn.Module):
         """
         B, N, P = box_points.shape[:3]
         T = next(iter(features_dict.values())).shape[1]
-        device = box_points.device
         num_cameras = len(features_dict)
         
         # Initialize output tensor to store all features
         C = next(iter(features_dict.values())).shape[2]  # Feature channels
-        all_point_features = torch.zeros(B, N, P, T, num_cameras, C, device=device)
+        all_point_features = torch.zeros(B, N, P, T, num_cameras, C)
         
         # For each time step, transform points to global frame, then project to cameras
         for t in range(T):
@@ -511,7 +460,6 @@ class TrajectoryDecoder(nn.Module):
             Tensor[B, N, P, 3] - Points in world coordinates at time t
         """
         B, N, P = box_points.shape[:3]
-        device = box_points.device
         
         # Extract trajectory parameters
         pos_x = traj_params[..., TrajParamIndex.X].unsqueeze(-1)  # [B, N, 1]
@@ -526,6 +474,7 @@ class TrajectoryDecoder(nn.Module):
         
         yaw = traj_params[..., TrajParamIndex.YAW].unsqueeze(-1)  # [B, N, 1]
         
+        import pdb; pdb.set_trace()
         # Calculate position at time t using motion model (constant acceleration)
         # x(t) = x0 + v0*t + 0.5*a*t^2
         pos_x_t = pos_x + vel_x * dt + 0.5 * acc_x * dt * dt

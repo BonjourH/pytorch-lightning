@@ -4,7 +4,7 @@ from typing import Dict, List, Optional
 import numpy as np
 
 from base import SourceCameraId, TrajParamIndex, ObjectType, AttributeType, CameraParamIndex, EgoStateIndex
-from .components import ImageFeatureExtractor, TrajectoryDecoderLayer, TrajectoryDecoder
+from .components import ImageFeatureExtractor, TrajectoryQueryRefineLayer, TrajectoryDecoder
 from .temporal_fusion_layer import TemporalFusionFactory
 
     
@@ -61,7 +61,7 @@ class E2EPerceptionNet(nn.Module):
         B = next(iter(batch['images'].values())).shape[0]
         
         # Extract features from each camera
-        all_features = {}
+        all_features_dict = {}
         for camera_id in self.camera_ids:
             images = batch['images'][camera_id]  # [B, T, C, H, W]
             B, T, C, H, W = images.shape
@@ -74,18 +74,14 @@ class E2EPerceptionNet(nn.Module):
             
             # Stack temporal features
             features = torch.stack(features, dim=1)  # [B, T, C, H, W]
-            all_features[camera_id] = features
+            all_features_dict[camera_id] = features
         
         # Fuse temporal features for each camera
-        fused_features = []
-        for camera_id, features in all_features.items():
-            fused = self.temporal_fusion(features)
-            fused_features.append(fused)
-        
-        # Average features across cameras
-        features = torch.stack(fused_features).mean(0)  # [B, C, H, W]
+        fused_features_dict = {}
+        for camera_id, features in all_features_dict.items():
+            fused_features_dict[camera_id] = self.temporal_fusion(features)
         
         # Decode trajectories
-        outputs = self.decoder(features)
+        outputs = self.decoder(fused_features_dict, batch['calibrations'], batch['ego_states'])
         
         return outputs 
