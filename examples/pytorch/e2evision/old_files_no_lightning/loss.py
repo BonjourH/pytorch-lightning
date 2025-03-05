@@ -5,7 +5,7 @@ from scipy.optimize import linear_sum_assignment
 from typing import Dict, List, Tuple, Optional
 import numpy as np
 from base import (
-    TrajParamIndex, AttributeType, ObjectType,
+    TrajParamIndex, ObjectType,
     ObstacleTrajectory, Point3DAccMotion
 )
 

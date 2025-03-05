@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Dict, List, Tuple
 import numpy as np
+from scipy.optimize import linear_sum_assignment
 
 from base import TrajParamIndex
 
@@ -12,7 +13,7 @@ def match_trajectories(
     frames: int = 10,
     dt: float = 0.1,
     iou_method: str = "iou2"
-) -> Tuple[List[Tuple[int, int]], torch.Tensor]:
+) -> Tuple[List[Tuple[int, int]], List[int], torch.Tensor]:
     """Match predicted trajectories to ground truth using Hungarian algorithm.
     
     Args:
@@ -24,14 +25,15 @@ def match_trajectories(
         
     Returns:
         Tuple containing:
-            - List of (pred_idx, gt_idx) pairs
+            - List of (pred_idx, gt_idx) pairs for matched trajectories
+            - List of pred_idx for unmatched predictions
             - Cost matrix [N, M]
     """
     device = pred_trajs.device
     N, M = len(pred_trajs), len(gt_trajs)
     
-    if N == 0 or M == 0:
-        return [], torch.zeros((N, M), device=device)
+    if M == 0:
+        return [], list(range(N)), torch.zeros((N, M), device=device)
     
     # Compute cost matrix
     cost_matrix = torch.zeros((N, M), device=device)
@@ -53,31 +55,30 @@ def match_trajectories(
                 )
             
             # Distance cost
-            dist = calculate_trajectory_distance(pred_trajs[i], gt_trajs[j])
+            dist_score = calculate_trajectory_distance_score(pred_trajs[i], gt_trajs[j])
+            
+            score = iou * 0.6 + dist_score * 0.4
+            
+            if pred_trajs[i, TrajParamIndex.HAS_OBJECT] < 0.5:
+                score *= 0.5
+            
+            obj_index = int(torch.argmax(pred_trajs[i][TrajParamIndex.CAR:]))
+            if gt_trajs[j, obj_index] != 1:
+                score *= 0.5
             
             # Combined cost
-            cost_matrix[i, j] = -iou + 0.1 * dist
+            cost_matrix[i, j] = 1 - score
     
     # Run Hungarian algorithm
     matches = []
-    if N > 0 and M > 0:
-        try:
-            from scipy.optimize import linear_sum_assignment
-            row_ind, col_ind = linear_sum_assignment(cost_matrix.cpu().numpy())
-            matches = list(zip(row_ind, col_ind))
-        except ImportError:
-            print("Warning: scipy not installed, falling back to greedy matching")
-            # Greedy matching
-            while len(matches) < min(N, M):
-                i, j = torch.argmin(cost_matrix.view(-1)).item() // M, torch.argmin(cost_matrix.view(-1)).item() % M
-                if cost_matrix[i, j] < float('inf'):
-                    matches.append((i, j))
-                    cost_matrix[i, :] = float('inf')
-                    cost_matrix[:, j] = float('inf')
-                else:
-                    break
+    row_ind, col_ind = linear_sum_assignment(cost_matrix.detach().cpu().numpy())
+    matches = list(zip(row_ind, col_ind))
     
-    return matches, cost_matrix
+    # Find unmatched prediction indices
+    matched_pred_indices = set(i for i, _ in matches)
+    unmatched_pred_indices = [i for i in range(N) if i not in matched_pred_indices]
+    
+    return matches, unmatched_pred_indices, cost_matrix
 
 class TrajectoryLoss(nn.Module):
     """Loss function for trajectory prediction."""
@@ -92,15 +93,21 @@ class TrajectoryLoss(nn.Module):
         
         # Set loss weights
         self.weight_dict = weight_dict or {
-            'loss_traj': 1.0,
-            'loss_type': 0.1,
-            'loss_exist': 1.0
+            'loss_pos': 1.0,      # 位置损失权重
+            'loss_vel': 1.0,      # 速度损失权重
+            'loss_acc': 1.0,      # 加速度损失权重
+            'loss_dim': 1.0,      # 尺寸损失权重
+            'loss_yaw': 1.0,      # 偏航角损失权重
+            'loss_type': 0.1,     # 类型损失权重
+            'loss_attr': 0.1,     # 属性损失权重
+            'fp_loss_exist': 1.0, # 假阳性存在损失权重
         }
+        
+        self.layer_loss_weights = [0.3, 0.5, 0.7, 0.9, 1.1, 1.3, 1.5]
         
         self.frames = frames
         self.dt = dt
         self.iou_method = iou_method
-        self.aux_loss_weight = aux_loss_weight
     
     def forward(self, outputs: List[Dict], targets: Dict) -> Dict:
         """Forward pass.
@@ -117,10 +124,8 @@ class TrajectoryLoss(nn.Module):
         
         # Process each decoder layer
         num_layers = len(outputs)
-        for idx, layer_out in enumerate(outputs):
-            # Get predictions
-            pred_trajs = layer_out['traj_params']  # [B, N, TrajParamIndex.END_OF_INDEX]
-            pred_types = layer_out['type_logits']  # [B, N, num_classes]
+        for idx, pred_trajs in enumerate(outputs):
+            # [B, N, TrajParamIndex.END_OF_INDEX]
             
             # Get targets
             gt_trajs = targets['trajs']  # [B, M, TrajParamIndex.END_OF_INDEX]
@@ -129,17 +134,24 @@ class TrajectoryLoss(nn.Module):
             layer_losses = self._compute_losses(
                 pred_trajs=pred_trajs,
                 gt_trajs=gt_trajs,
-                prefix=f'layer_{idx}_' if idx < num_layers-1 else ''
+                prefix=f'layer_{idx}_'
             )
-            
-            # Weight auxiliary losses
-            if idx < num_layers-1:
-                layer_losses = {k: self.aux_loss_weight * v for k, v in layer_losses.items()}
             
             losses.update(layer_losses)
         
         # Weight and sum all losses
-        return {k: self.weight_dict[k] * v for k, v in losses.items() if k in self.weight_dict}
+        weighted_losses = {}
+        for k, v in losses.items():
+            layer_idx = int(k.split('_')[1])
+            post_fix = "_".join(k.split('_')[2:])
+            weight = self.weight_dict[post_fix] * self.layer_loss_weights[layer_idx]
+            weighted_losses[k] = weight * v
+        
+        # Calculate total loss
+        total_loss = sum(weighted_losses.values())
+        weighted_losses['loss'] = total_loss
+        
+        return weighted_losses
     
     def _compute_losses(self, 
                        pred_trajs: torch.Tensor, 
@@ -161,24 +173,31 @@ class TrajectoryLoss(nn.Module):
         
         # Process each batch
         for b in range(B):
-            # Get valid predictions and targets
-            valid_preds = pred_trajs[b][pred_trajs[b, :, TrajParamIndex.HAS_OBJECT] > 0.5]
             valid_targets = gt_trajs[b][gt_trajs[b, :, TrajParamIndex.HAS_OBJECT] > 0.5]
             
             # Match trajectories
-            matches, cost_matrix = match_trajectories(
-                valid_preds,
+            matches, unmatched_pred_indices, cost_matrix = match_trajectories(
+                pred_trajs[b],
                 valid_targets,
                 frames=self.frames,
                 dt=self.dt,
                 iou_method=self.iou_method
             )
             
+            # For the unmatched pred traj, we only penalize the existence loss
+            if unmatched_pred_indices:
+                pred_unmatched = pred_trajs[b][torch.tensor(unmatched_pred_indices, device=device)]
+                exist_loss = F.binary_cross_entropy_with_logits(
+                    pred_unmatched[:, TrajParamIndex.HAS_OBJECT],
+                    torch.zeros_like(pred_unmatched[:, TrajParamIndex.HAS_OBJECT])
+                )
+                losses[f'{prefix}fp_loss_exist'] = exist_loss
+            
+            # For the matched pred traj, we add the loss for all the predictions
             if matches:
+                pred_matched = pred_trajs[b][torch.tensor(list(zip(*matches))[0], device=device)]
+                target_matched = valid_targets[torch.tensor(list(zip(*matches))[1], device=device)]
                 # Trajectory parameter loss
-                pred_matched = valid_preds[torch.tensor([i for i, _ in matches], device=device)]
-                target_matched = valid_targets[torch.tensor([j for _, j in matches], device=device)]
-                
                 # Position loss
                 pos_loss = F.l1_loss(
                     pred_matched[:, [TrajParamIndex.X, TrajParamIndex.Y, TrajParamIndex.Z]],
@@ -215,18 +234,18 @@ class TrajectoryLoss(nn.Module):
                 losses[f'{prefix}loss_yaw'] = yaw_loss
                 
                 # Type loss
-                type_loss = F.cross_entropy(
-                    pred_matched[:, TrajParamIndex.OBJECT_TYPE].unsqueeze(1),
-                    target_matched[:, TrajParamIndex.OBJECT_TYPE].long()
+                type_loss = F.binary_cross_entropy_with_logits(
+                    pred_matched[:, TrajParamIndex.CAR:TrajParamIndex.UNKNOWN+1],
+                    target_matched[:, TrajParamIndex.CAR:TrajParamIndex.UNKNOWN+1]
                 )
                 losses[f'{prefix}loss_type'] = type_loss
-            
-            # Existence loss
-            exist_loss = F.binary_cross_entropy_with_logits(
-                pred_trajs[b, :, TrajParamIndex.HAS_OBJECT],
-                gt_trajs[b, :, TrajParamIndex.HAS_OBJECT]
-            )
-            losses[f'{prefix}loss_exist'] = exist_loss
+                
+                # Attribute loss
+                attr_loss = F.binary_cross_entropy_with_logits(
+                    pred_matched[:, TrajParamIndex.HAS_OBJECT:TrajParamIndex.OCCLUDED+1],
+                    target_matched[:, TrajParamIndex.HAS_OBJECT:TrajParamIndex.OCCLUDED+1]
+                )
+                losses[f'{prefix}loss_attr'] = attr_loss
         
         # Average losses across batch
         return {k: v.mean() for k, v in losses.items()}
@@ -259,7 +278,7 @@ def calculate_trajectory_bev_iou2(traj1: torch.Tensor, traj2: torch.Tensor, fram
     # TODO: Implement improved BEV IoU calculation
     return torch.zeros(1, device=traj1.device)
 
-def calculate_trajectory_distance(traj1: torch.Tensor, traj2: torch.Tensor) -> torch.Tensor:
+def calculate_trajectory_distance_score(traj1: torch.Tensor, traj2: torch.Tensor) -> torch.Tensor:
     """Calculate distance between trajectories.
     
     Args:
@@ -269,6 +288,17 @@ def calculate_trajectory_distance(traj1: torch.Tensor, traj2: torch.Tensor) -> t
     Returns:
         Distance value
     """
+    # calculate distance between two points
     pos1 = traj1[[TrajParamIndex.X, TrajParamIndex.Y, TrajParamIndex.Z]]
     pos2 = traj2[[TrajParamIndex.X, TrajParamIndex.Y, TrajParamIndex.Z]]
-    return torch.norm(pos1 - pos2) 
+    dist = torch.norm(pos1 - pos2)
+    
+    # Use average size of both objects to normalize distance
+    size1 = traj1[[TrajParamIndex.LENGTH, TrajParamIndex.WIDTH, TrajParamIndex.HEIGHT]]
+    size2 = traj2[[TrajParamIndex.LENGTH, TrajParamIndex.WIDTH, TrajParamIndex.HEIGHT]]
+    size_diff = torch.norm(size1 - size2)
+    
+    
+    # Normalized distance score that decays with distance relative to object size
+    dist_score = torch.exp(-(dist + size_diff) / (size_diff + 1e-6))
+    return dist_score

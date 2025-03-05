@@ -5,7 +5,7 @@ from typing import Dict, Optional, List
 import numpy as np
 import torch.nn.functional as F
 
-from base import SourceCameraId, ObjectType, TrajParamIndex, AttributeType, CameraParamIndex, EgoStateIndex
+from base import SourceCameraId, TrajParamIndex, CameraParamIndex, EgoStateIndex, CameraType
 
 class ImageFeatureExtractor(nn.Module):
     """Image feature extraction module."""
@@ -108,7 +108,7 @@ class TrajectoryDecoder(nn.Module):
                  num_layers: int = 6,
                  num_queries: int = 128,
                  feature_dim: int = 256,
-                 hidden_dim: int =  512,
+                 hidden_dim: int = 512,
                  num_points: int = 25): # Points to sample per face of the unit cube
         super().__init__()
         
@@ -121,46 +121,27 @@ class TrajectoryDecoder(nn.Module):
         self.query_pos = nn.Parameter(torch.randn(num_queries, query_dim))
         
         # Sample points on unit cube for feature gathering
-        unit_points = self._generate_unit_cube_points(num_points)
-        self.register_buffer('unit_points', unit_points)
+        self.register_buffer('unit_points', self._generate_unit_cube_points(num_points))
         
         # Parameter ranges for normalization: torch.Tensor[TrajParamIndex.HEIGHT + 1, 2]
         ranges = self._get_motion_param_range()
         self.register_buffer('motion_min_vals', ranges[:, 0])
         self.register_buffer('motion_ranges', ranges[:, 1] - ranges[:, 0])
          
-        # QUERY TO TRAJECTORY PARAMETERS PART
-        # 1. Motion parameter head - predict normalized 0-1 values for motion & size
-        self.motion_head = nn.Sequential(
+        # Single trajectory parameter head that outputs all trajectory parameters
+        self.traj_head = nn.Sequential(
             nn.Linear(query_dim, hidden_dim),
             nn.ReLU(),
-            nn.Linear(hidden_dim, TrajParamIndex.HEIGHT + 1),
-            nn.Sigmoid()  # Output normalized 0-1 values
+            nn.Linear(hidden_dim, TrajParamIndex.END_OF_INDEX)
         )
         
-        # 2. Object type classification head
-        self.type_head = nn.Sequential(
-            nn.Linear(query_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, len(ObjectType))
-        )
-        
-        # 3. Attribute prediction head
-        self.attribute_head = nn.Sequential(
-            nn.Linear(query_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, AttributeType.END_OF_INDEX)
-        )
-        
-        # Reprojected Points Feature fusion layers
         self.feature_mlp = nn.Sequential(
             nn.Linear(feature_dim, hidden_dim),
             nn.ReLU(),
-            nn.Linear(hidden_dim, feature_dim),
-            nn.LayerNorm(feature_dim)
+            nn.Linear(hidden_dim, feature_dim)
         )
         
-        # Decoder layers
+        # Refiner layers
         self.layers = nn.ModuleList([
             TrajectoryQueryRefineLayer(
                 feature_dim=feature_dim,
@@ -168,7 +149,7 @@ class TrajectoryDecoder(nn.Module):
                 dim_feedforward=hidden_dim
             ) for _ in range(num_layers)
         ])
-         
+        
         # Initialize parameters
         for p in self.parameters():
             if p.dim() > 1:
@@ -177,41 +158,38 @@ class TrajectoryDecoder(nn.Module):
     def forward(self, 
                 features_dict: Dict[SourceCameraId, torch.Tensor],
                 calibrations: Dict[SourceCameraId, torch.Tensor],
-                ego_states: torch.Tensor) -> List[Dict]:
-        """Forward pass to predict trajectories from features.
-        
+                ego_states: torch.Tensor) -> List[torch.Tensor]:
+        """
         Args:
             features_dict: Dict[camera_id -> Tensor[B, T, C, H, W]]
             calibrations: Dict[camera_id -> Tensor[B, CameraParamIndex.END_OF_INDEX]]
             ego_states: Tensor[B, T, EgoStateIndex.END_OF_INDEX]
             
         Returns:
-            List[Dict]
-                - traj_params: Tensor[B, N, TrajParamIndex.END_OF_INDEX]
-                - type_logits: Tensor[B, N, len(ObjectType)]
+            List of trajectory parameter tensors [B, num_queries, TrajParamIndex.END_OF_INDEX]
         """
         B = next(iter(features_dict.values())).shape[0]
         
-        # Process each decoder layer
-        queries = self.queries.unsqueeze(0).expand(B, -1, -1)  # [B, num_queries, C]
-        # query_pos = self.query_pos.unsqueeze(0).expand(B, -1, -1)  # [B, num_queries, C]
+        # Create initial object queries
+        queries = self.queries.unsqueeze(0).repeat(B, 1, 1)  # [B, num_queries, C]
+        pos = self.query_pos.unsqueeze(0).repeat(B, 1, 1)    # [B, num_queries, C]
         
-        # List to store all predictions (for auxiliary loss)
+        # List to store all trajectory parameters
         outputs = []
         
-        # Decoder iteratively refines predictions
+        # Decoder iteratively refines trajectory parameters
         for layer in self.layers:
             # 1. Predict parameters from current queries
-            predictions = self.predict_trajectory_parameters(queries) 
+            traj_params = self.traj_head(queries) 
             # Dict[traj_params: Tensor[B, N, TrajParamIndex.END_OF_INDEX], type_logits: Tensor[B, N, len(ObjectType)]]
-            outputs.append(predictions)
+            outputs.append(traj_params)
             
             # 2. Sample points on predicted objects
-            box_points = self.sample_box_points(predictions['traj_params'])  # [B, N, num_points, 3]
+            box_points = self.sample_box_points(traj_params)  # [B, N, num_points, 3]
             
             # 3. Gather features from all views and frames
             point_features = self.gather_point_features(
-                box_points, predictions['traj_params'], features_dict, calibrations, ego_states
+                box_points, traj_params, features_dict, calibrations, ego_states
             )  # [B, N, num_points, T, num_cameras, C]
             
             # 4. Aggregate features
@@ -222,7 +200,7 @@ class TrajectoryDecoder(nn.Module):
             
             
         # Get final predictions
-        outputs.append(self.predict_trajectory_parameters(queries))
+        outputs.append(self.traj_head(queries))
         
         return outputs
     
@@ -298,45 +276,6 @@ class TrajectoryDecoder(nn.Module):
         
         return param_range
     
-    def predict_trajectory_parameters(self, queries: torch.Tensor) -> Dict[str, torch.Tensor]:
-        """Predict trajectory parameters from queries.
-        
-        Args:
-            queries: Object queries [B, num_queries, C]
-            
-        Returns:
-            Dict containing:
-                - traj_params: Trajectory parameters [B, num_queries, TrajParamIndex.END_OF_INDEX]
-                - type_logits: Object type logits [B, num_queries, len(ObjectType)]
-        """
-        B, N, C = queries.shape
-        
-        traj_params = torch.zeros(B, N, TrajParamIndex.END_OF_INDEX).to(queries.device)
-        
-        # 1. Predict motion parameters (normalized 0-1)
-        norm_params = self.motion_head(queries)  # [B, N, TrajParamIndex.HEIGHT + 1]
-        traj_params[:, :, :TrajParamIndex.HEIGHT + 1] = self.motion_min_vals + self.motion_ranges * norm_params
-
-        # 2. Predict object type
-        type_logits = self.type_head(queries)  # [B, N, len(ObjectType)]
-        type_probs = F.softmax(type_logits, dim=-1)
-        object_type = torch.argmax(type_probs, dim=-1)  # [B, N]
-        traj_params[:, :, TrajParamIndex.OBJECT_TYPE] = object_type.float()
-        
-        # 3. Predict attributes
-        attribute_logits = self.attribute_head(queries)  # [B, N, AttributeType.END_OF_INDEX]
-        attributes = torch.sigmoid(attribute_logits)  # Each attribute is binary
-        
-        # Map attributes to trajectory parameters
-        traj_params[:, :, TrajParamIndex.HAS_OBJECT] = attributes[:, :, AttributeType.HAS_OBJECT]
-        traj_params[:, :, TrajParamIndex.STATIC] = attributes[:, :, AttributeType.STATIC]
-        traj_params[:, :, TrajParamIndex.OCCLUDED] = attributes[:, :, AttributeType.OCCLUDED]
-        
-        return {
-            'traj_params': traj_params, # Tensor[B, N, TrajParamIndex.END_OF_INDEX]
-            'type_logits': type_logits # Tensor[B, N, len(ObjectType)]
-        }
-    
     def sample_box_points(self, traj_params: torch.Tensor) -> torch.Tensor:
         """Sample points on 3D bounding box in object's local coordinate system.
         
@@ -355,11 +294,10 @@ class TrajectoryDecoder(nn.Module):
         # Scale unit cube points by dimensions
         # unit_points: [num_points, 3]
         # dims: [B, N, 3]
-        dims = torch.stack([length, width, height], dim=-1)  # [B, N, 3]
+        dims = torch.stack([length, width, height], dim=-1)  # [B, N, 1, 3]
          
         # Scale unit cube points by dimensions and ensure same device
-        box_points = self.unit_points.unsqueeze(0).unsqueeze(0) * dims.unsqueeze(2)  # [B, N, num_points, 3]
-        
+        box_points = self.unit_points.unsqueeze(0).unsqueeze(0) * dims  # [B, N, num_points, 3]
         return box_points
     
     def gather_point_features(self, 
@@ -373,7 +311,7 @@ class TrajectoryDecoder(nn.Module):
         Args:
             box_points: Tensor[B, N, num_points, 3]: Points in object local coordinates
             traj_params: Tensor[B, N, TrajParamIndex.END_OF_INDEX]
-            features_dict: Dict[camera_id -> Tensor[B, T, C, H, W]]
+            features_dict: Dict[camera_id -> Tensor[B, C, H, W]]
             calibrations: Dict[camera_id -> Tensor[B, CameraParamIndex.END_OF_INDEX]]
             ego_states: Tensor[B, T, EgoStateIndex.END_OF_INDEX]
             
@@ -381,12 +319,12 @@ class TrajectoryDecoder(nn.Module):
             Tensor[B, N, num_points, T, num_cameras, C]
         """
         B, N, P = box_points.shape[:3]
-        T = next(iter(features_dict.values())).shape[1]
+        T = ego_states.shape[1]
         num_cameras = len(features_dict)
         
         # Initialize output tensor to store all features
-        C = next(iter(features_dict.values())).shape[2]  # Feature channels
-        all_point_features = torch.zeros(B, N, P, T, num_cameras, C)
+        C = next(iter(features_dict.values())).shape[1]
+        all_point_features = torch.zeros(B, N, P, T, num_cameras, C).to(box_points.device)
         
         # For each time step, transform points to global frame, then project to cameras
         for t in range(T):
@@ -415,8 +353,7 @@ class TrajectoryDecoder(nn.Module):
                 )  # [B, N, P]
                 
                 # Sample features at projected points
-                frame_features = features[:, t]  # [B, C, H, W]
-                H, W = frame_features.shape[-2:]
+                H, W = features.shape[-2:]
                 
                 # Convert normalized coordinates [0,1] to grid coordinates [-1,1] for grid_sample
                 norm_points = torch.zeros_like(points_2d)
@@ -428,7 +365,7 @@ class TrajectoryDecoder(nn.Module):
                 
                 # Sample features
                 sampled = F.grid_sample(
-                    frame_features, grid, mode='bilinear', 
+                    features, grid, mode='bilinear', 
                     padding_mode='zeros', align_corners=True
                 )  # [B, C, N*P, 1]
                 
@@ -474,7 +411,6 @@ class TrajectoryDecoder(nn.Module):
         
         yaw = traj_params[..., TrajParamIndex.YAW].unsqueeze(-1)  # [B, N, 1]
         
-        import pdb; pdb.set_trace()
         # Calculate position at time t using motion model (constant acceleration)
         # x(t) = x0 + v0*t + 0.5*a*t^2
         pos_x_t = pos_x + vel_x * dt + 0.5 * acc_x * dt * dt

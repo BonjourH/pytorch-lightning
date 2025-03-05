@@ -167,7 +167,7 @@ class MultiFrameDataset(Dataset):
                         trajs = []
                         for obj_data in obstacle_labels[i]['obstacles']:
                             traj = torch.zeros(TrajParamIndex.END_OF_INDEX)
-                            
+                            # motion parameters
                             traj[TrajParamIndex.X] = obj_data.get('x', 0.0)
                             traj[TrajParamIndex.Y] = obj_data.get('y', 0.0)
                             traj[TrajParamIndex.Z] = obj_data.get('z', 0.0)
@@ -179,11 +179,12 @@ class MultiFrameDataset(Dataset):
                             traj[TrajParamIndex.LENGTH] = obj_data.get('length', 0.0)
                             traj[TrajParamIndex.WIDTH] = obj_data.get('width', 0.0)
                             traj[TrajParamIndex.HEIGHT] = obj_data.get('height', 0.0)
+                            # object attributes
                             traj[TrajParamIndex.HAS_OBJECT] = 1.0
                             traj[TrajParamIndex.STATIC] = obj_data.get('static', 0.0)
                             traj[TrajParamIndex.OCCLUDED] = obj_data.get('occluded', 0.0)
-                            obj_type_str = obj_data.get('type', 'UNKNOWN')
-                            traj[TrajParamIndex.OBJECT_TYPE] = float(ObjectType[obj_type_str])
+                            # object type
+                            traj[ObjectType[obj_data.get('type', 'UNKNOWN')]] = 1.0
                             
                             trajs.append(traj)
                         assert len(trajs) <= MAX_TRAJ_NB, f"Number of trajectories exceeds MAX_TRAJ_NB: {len(trajs)}"
@@ -231,6 +232,7 @@ def custom_collate_fn(batch: List[Dict]) -> Dict:
     collated = {
         'images': {},      # Dict[camera_id -> Tensor[B, T, C, H, W]]
         'calibrations': {},  # Dict[camera_id -> Tensor[B, CameraParamIndex.END_OF_INDEX]]
+        'valid_traj_nb': torch.zeros(B),  # Tensor[B]
         'trajs': torch.zeros(B, MAX_TRAJ_NB, TrajParamIndex.END_OF_INDEX),  # Tensor[B, MAX_TRAJ_NB, TrajParamIndex.END_OF_INDEX]   
         'ego_states': torch.stack([b['ego_states'] for b in batch])  # Tensor[B, T, EgoStateIndex.END_OF_INDEX]
     }
@@ -246,6 +248,7 @@ def custom_collate_fn(batch: List[Dict]) -> Dict:
     # Collate trajectories
     for b_idx, b in enumerate(batch):
         collated['trajs'][b_idx, :len(b['trajs'])] = b['trajs']
+        collated['valid_traj_nb'][b_idx] = len(b['trajs'])
             
     return collated
 

@@ -16,6 +16,8 @@ DEVICES=1
 PRECISION="16-mixed"
 ACCUMULATE_GRAD_BATCHES=4  # 添加梯度累积参数，可以根据需要调整
 BACKBONE="resnet18"  # 使用更轻量级的backbone
+NUM_QUERIES=16  # 添加 num_queries 参数
+SEED=42  # 添加随机种子参数
 
 # 创建带时间戳的实验名称
 # TIMESTAMP=$(date +%Y%m%d_%H%M%S || echo "default")
@@ -69,6 +71,8 @@ LOG_FILE="${LOG_DIR}/${EXP_NAME}.log"
         --precision "${PRECISION}" \
         --accumulate-grad-batches "${ACCUMULATE_GRAD_BATCHES}" \
         --backbone "${BACKBONE}" \
+        --num-queries "${NUM_QUERIES}" \
+        --seed "${SEED}" \
         --experiment-name "${EXP_NAME}"
 
     echo -e "\n======== System Resources After Training ========"

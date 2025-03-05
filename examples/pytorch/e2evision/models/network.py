@@ -3,7 +3,7 @@ import torch.nn as nn
 from typing import Dict, List, Optional
 import numpy as np
 
-from base import SourceCameraId, TrajParamIndex, ObjectType, AttributeType, CameraParamIndex, EgoStateIndex
+from base import SourceCameraId, TrajParamIndex, ObjectType, CameraParamIndex, EgoStateIndex
 from .components import ImageFeatureExtractor, TrajectoryQueryRefineLayer, TrajectoryDecoder
 from .temporal_fusion_layer import TemporalFusionFactory
 
@@ -14,7 +14,7 @@ class E2EPerceptionNet(nn.Module):
     def __init__(self,
                  camera_ids: List[SourceCameraId],
                  feature_dim: int = 256,
-                 num_queries: int = 100,
+                 num_queries: int = 128,
                  num_decoder_layers: int = 6,
                  use_pretrained: bool = False,
                  backbone: str = 'resnet50'):

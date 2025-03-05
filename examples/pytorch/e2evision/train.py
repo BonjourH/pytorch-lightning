@@ -2,6 +2,7 @@ import os
 import lightning as L
 from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.loggers import TensorBoardLogger, CSVLogger
+from lightning.pytorch.loggers import WandbLogger
 import argparse
 import warnings
 
@@ -30,6 +31,7 @@ def parse_args():
     parser.add_argument('--weight-decay', type=float, default=1e-4, help='Weight decay')
     parser.add_argument('--max-epochs', type=int, default=100, help='Maximum number of epochs')
     parser.add_argument('--resume', type=str, default='', help='Path to checkpoint to resume from')
+    parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility')
     
     # Hardware arguments
     parser.add_argument('--accelerator', type=str, default='auto', help='Accelerator to use (auto, gpu, cpu)')
@@ -49,6 +51,9 @@ def parse_args():
 def main():
     # Parse arguments
     args = parse_args()
+    
+    # Set random seed
+    L.seed_everything(args.seed, workers=True)
     
     # Define camera IDs
     camera_ids = [
@@ -93,6 +98,11 @@ def main():
         save_dir=args.save_dir,
         name=args.experiment_name
     )
+    wandb_logger = WandbLogger(
+        project='e2e_perception',
+        name=args.experiment_name,
+        save_dir=args.save_dir
+    )
     
     # Create callbacks
     checkpoint_callback = ModelCheckpoint(
@@ -109,7 +119,7 @@ def main():
         devices=args.devices,
         precision=args.precision,
         max_epochs=args.max_epochs,
-        logger=[tb_logger, csv_logger],
+        logger=[tb_logger, csv_logger, wandb_logger],
         callbacks=[checkpoint_callback],
         gradient_clip_val=0.5,
         accumulate_grad_batches=args.accumulate_grad_batches,

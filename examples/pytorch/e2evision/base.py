@@ -69,15 +69,7 @@ class EgoStateIndex(IntEnum):
     END_OF_INDEX = 10    
     
 # OBSTACLE RELATED 
-class AttributeType(IntEnum):
-    """Attribute type enumeration."""
-    HAS_OBJECT = 0
-    STATIC = 1
-    OCCLUDED = 2
-    END_OF_INDEX = 3
-
 class ObjectType(IntEnum):
-    """Object type enumeration."""
     UNKNOWN = 0
     CAR = 1
     SUV = 2
@@ -90,12 +82,11 @@ class ObjectType(IntEnum):
     CYCLIST = 9
     MOTORCYCLIST = 10
     CONE = 11
-    BARRIER = 12
+    END_OF_INDEX = 12
     
     def __str__(self):
         return self.name
-
-
+    
 class TrajParamIndex(IntEnum):
     """Motion parameters index enumeration."""
     X = 0           # position x
@@ -109,11 +100,25 @@ class TrajParamIndex(IntEnum):
     LENGTH = 8      # dimensions
     WIDTH = 9
     HEIGHT = 10
-    HAS_OBJECT = 11
+    HAS_OBJECT = 11 # The below are object attributes
     STATIC = 12
     OCCLUDED = 13
-    OBJECT_TYPE = 14
-    END_OF_INDEX = 15
+    CAR = 14        # The below are object type
+    SUV = 15
+    LIGHTTRUCK = 16
+    TRUCK = 17
+    BUS = 18
+    PEDESTRIAN = 19
+    BICYCLE = 20
+    MOTO = 21
+    CYCLIST = 22
+    MOTORCYCLIST = 23
+    CONE = 24
+    UNKNOWN = 25
+    END_OF_INDEX = 26
+    
+    def __str__(self):
+        return self.name
 
 
 @dataclass
@@ -267,6 +272,9 @@ def tensor_to_trajectory(traj_params: torch.Tensor, traj_id: int = 0, t0: float 
         az=0.0   # Z acceleration not predicted
     )
     
+    # get object type, by taking the max value index
+    index = int(torch.argmax(traj_params[TrajParamIndex.CAR:]))
+    
     # Create ObstacleTrajectory object
     return ObstacleTrajectory(
         id=traj_id,
@@ -275,7 +283,7 @@ def tensor_to_trajectory(traj_params: torch.Tensor, traj_id: int = 0, t0: float 
         length=float(traj_params[TrajParamIndex.LENGTH]),
         width=float(traj_params[TrajParamIndex.WIDTH]),
         height=float(traj_params[TrajParamIndex.HEIGHT]),
-        object_type=ObjectType(int(traj_params[TrajParamIndex.OBJECT_TYPE].item())),
+        object_type=ObjectType[TrajParamIndex(index).name],
         t0=t0,
         static=bool(traj_params[TrajParamIndex.STATIC] > 0.5),
         valid=bool(traj_params[TrajParamIndex.HAS_OBJECT] > 0.5)
