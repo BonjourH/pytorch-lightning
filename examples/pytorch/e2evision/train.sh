@@ -9,10 +9,10 @@ mkdir -p "${LOG_DIR}"
 TRAIN_LIST="train_clips.txt"
 VAL_LIST="val_clips.txt"
 BATCH_SIZE=1
-NUM_WORKERS=4
+NUM_WORKERS=1
 MAX_EPOCHS=100
 ACCELERATOR="gpu"
-DEVICES=3
+DEVICES=1
 PRECISION="16-mixed"
 ACCUMULATE_GRAD_BATCHES=4  # 添加梯度累积参数，可以根据需要调整
 BACKBONE="resnet18"  # 使用更轻量级的backbone
@@ -53,7 +53,7 @@ LOG_FILE="${LOG_DIR}/${EXP_NAME}.log"
     echo "  Precision: ${PRECISION}"
 
     # 设置可见GPU
-    export CUDA_VISIBLE_DEVICES=0,7,8
+    export CUDA_VISIBLE_DEVICES=0
 
     echo -e "\n======== Training Start ========"
     # 训练命令
