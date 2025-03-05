@@ -210,3 +210,5 @@ _notebooks/.notebooks/
 tb_logs/
 
 *checkpoint*
+*train_clips.txt*
+*val_clips.txt*

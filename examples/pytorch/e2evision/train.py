@@ -23,6 +23,7 @@ def parse_args():
     parser.add_argument('--feature-dim', type=int, default=256, help='Feature dimension')
     parser.add_argument('--num-queries', type=int, default=64, help='Number of object queries')
     parser.add_argument('--num-decoder-layers', type=int, default=6, help='Number of decoder layers')
+    parser.add_argument('--backbone', type=str, default='resnet50', choices=['resnet18', 'resnet34', 'resnet50'], help='Backbone model')
     
     # Training arguments
     parser.add_argument('--learning-rate', type=float, default=1e-4, help='Learning rate')
@@ -34,6 +35,7 @@ def parse_args():
     parser.add_argument('--accelerator', type=str, default='auto', help='Accelerator to use (auto, gpu, cpu)')
     parser.add_argument('--devices', type=int, default=1, help='Number of devices to use')
     parser.add_argument('--precision', type=str, default='32-true', help='Precision for training')
+    parser.add_argument('--accumulate-grad-batches', type=int, default=1, help='Number of batches to accumulate gradients')
     
     # Pretrained weights argument
     parser.add_argument('--pretrained-weights', action='store_true', help='Use pretrained weights (requires internet connection)')
@@ -77,7 +79,8 @@ def main():
         learning_rate=args.learning_rate,
         weight_decay=args.weight_decay,
         max_epochs=args.max_epochs,
-        use_pretrained=args.pretrained_weights
+        use_pretrained=args.pretrained_weights,
+        backbone=args.backbone
     )
     
     # Create loggers
@@ -109,7 +112,7 @@ def main():
         logger=[tb_logger, csv_logger],
         callbacks=[checkpoint_callback],
         gradient_clip_val=0.5,
-        accumulate_grad_batches=1,
+        accumulate_grad_batches=args.accumulate_grad_batches,
         deterministic=True
     )
     

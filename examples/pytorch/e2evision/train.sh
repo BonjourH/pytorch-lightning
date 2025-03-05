@@ -12,11 +12,14 @@ BATCH_SIZE=1
 NUM_WORKERS=4
 MAX_EPOCHS=100
 ACCELERATOR="gpu"
-DEVICES=8
-PRECISION="32-true"
+DEVICES=3
+PRECISION="16-mixed"
+ACCUMULATE_GRAD_BATCHES=4  # 添加梯度累积参数，可以根据需要调整
+BACKBONE="resnet18"  # 使用更轻量级的backbone
 
 # 创建带时间戳的实验名称
-TIMESTAMP=$(date +%Y%m%d_%H%M%S || echo "default")
+# TIMESTAMP=$(date +%Y%m%d_%H%M%S || echo "default")
+TIMESTAMP=$(date +%Y%m%d || echo "default")
 EXP_NAME="e2e_perception_${TIMESTAMP}"
 
 # 设置日志文件
@@ -50,7 +53,7 @@ LOG_FILE="${LOG_DIR}/${EXP_NAME}.log"
     echo "  Precision: ${PRECISION}"
 
     # 设置可见GPU
-    export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7,8,9
+    export CUDA_VISIBLE_DEVICES=0,7,8
 
     echo -e "\n======== Training Start ========"
     # 训练命令
@@ -64,6 +67,8 @@ LOG_FILE="${LOG_DIR}/${EXP_NAME}.log"
         --accelerator "${ACCELERATOR}" \
         --devices "${DEVICES}" \
         --precision "${PRECISION}" \
+        --accumulate-grad-batches "${ACCUMULATE_GRAD_BATCHES}" \
+        --backbone "${BACKBONE}" \
         --experiment-name "${EXP_NAME}"
 
     echo -e "\n======== System Resources After Training ========"

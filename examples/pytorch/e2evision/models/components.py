@@ -7,21 +7,34 @@ from base import SourceCameraId, ObjectType, TrajParamIndex
 
 class ImageFeatureExtractor(nn.Module):
     """Image feature extraction module."""
-    def __init__(self, out_channels: int = 256, use_pretrained: bool = False):
+    def __init__(self, out_channels: int = 256, use_pretrained: bool = False, backbone: str = 'resnet50'):
         super().__init__()
         
-        # Use ResNet50 as backbone with weights parameter based on use_pretrained flag
-        if use_pretrained:
-            resnet = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
-        else:
-            # Skip downloading weights if not using pretrained
-            resnet = models.resnet50(weights=None)
+        # 选择backbone
+        if backbone == 'resnet18':
+            # 使用更轻量级的ResNet18
+            if use_pretrained:
+                resnet = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
+            else:
+                resnet = models.resnet18(weights=None)
+            self.channel_adjust = nn.Conv2d(512, out_channels, 1)  # ResNet18输出512通道
+        elif backbone == 'resnet34':
+            if use_pretrained:
+                resnet = models.resnet34(weights=models.ResNet34_Weights.DEFAULT)
+            else:
+                resnet = models.resnet34(weights=None)
+            self.channel_adjust = nn.Conv2d(512, out_channels, 1)  # ResNet34输出512通道
+        else:  # 默认使用ResNet50
+            # Use ResNet50 as backbone with weights parameter based on use_pretrained flag
+            if use_pretrained:
+                resnet = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
+            else:
+                # Skip downloading weights if not using pretrained
+                resnet = models.resnet50(weights=None)
+            self.channel_adjust = nn.Conv2d(2048, out_channels, 1)  # ResNet50输出2048通道
         
         # Remove classification head
         self.backbone = nn.Sequential(*list(resnet.children())[:-2])
-        
-        # Add 1x1 conv to adjust channel dimension
-        self.channel_adjust = nn.Conv2d(2048, out_channels, 1)
         
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
