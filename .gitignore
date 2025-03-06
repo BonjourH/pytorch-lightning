@@ -212,3 +212,4 @@ tb_logs/
 *checkpoint*
 *train_clips.txt*
 *val_clips.txt*
+*test_list.txt*
