@@ -5,132 +5,128 @@ from lightning.pytorch.loggers import TensorBoardLogger, CSVLogger
 from lightning.pytorch.loggers import WandbLogger
 import argparse
 import warnings
+import sys
+import time
 
 from base import SourceCameraId
 from models.module import E2EPerceptionModule
 from e2e_dataset.datamodule import E2EPerceptionDataModule
 from utils.visualization import Visualizer
+from configs.config import get_config
+
+# Import configuration file
+# Configuration file parameters
+# Important control parameters
+# General way to override any configuration item in the configuration file
+# Set random seed
+# Get checkpoint path
+# Save all checkpoints
+# Save the last checkpoint as last.ckpt
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Train E2E perception model')
     
-    # Data arguments
-    parser.add_argument('--train-list', type=str, required=True, help='Path to train clip list')
-    parser.add_argument('--val-list', type=str, required=True, help='Path to validation clip list')
-    parser.add_argument('--batch-size', type=int, default=1, help='Batch size')
-    parser.add_argument('--num-workers', type=int, default=4, help='Number of data loading workers')
+    # Configuration file parameters
+    parser.add_argument('--config_file', type=str, default=None, help='config file path, could be a python file, yaml file or json file')
     
-    # Model arguments
-    parser.add_argument('--feature-dim', type=int, default=256, help='Feature dimension')
-    parser.add_argument('--num-queries', type=int, default=64, help='Number of object queries')
-    parser.add_argument('--num-decoder-layers', type=int, default=6, help='Number of decoder layers')
-    parser.add_argument('--backbone', type=str, default='resnet50', choices=['resnet18', 'resnet34', 'resnet50'], help='Backbone model')
-    
-    # Training arguments
-    parser.add_argument('--learning-rate', type=float, default=1e-4, help='Learning rate')
-    parser.add_argument('--weight-decay', type=float, default=1e-4, help='Weight decay')
-    parser.add_argument('--max-epochs', type=int, default=100, help='Maximum number of epochs')
-    parser.add_argument('--resume', type=str, default='', help='Path to checkpoint to resume from')
-    parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility')
-    
-    # Hardware arguments
-    parser.add_argument('--accelerator', type=str, default='auto', help='Accelerator to use (auto, gpu, cpu)')
-    parser.add_argument('--devices', type=int, default=1, help='Number of devices to use')
-    parser.add_argument('--precision', type=str, default='32-true', help='Precision for training')
-    parser.add_argument('--accumulate-grad-batches', type=int, default=1, help='Number of batches to accumulate gradients')
-    
-    # Pretrained weights argument
-    parser.add_argument('--pretrained-weights', action='store_true', help='Use pretrained weights (requires internet connection)')
-    
-    # Logging arguments
-    parser.add_argument('--experiment-name', type=str, default='e2e_perception', help='Name of the experiment')
-    parser.add_argument('--save-dir', type=str, default='checkpoints', help='Directory to save outputs')
+    # Important control parameters
+    parser.add_argument('--experiment-name', type=str, help='Name of the experiment')
+    parser.add_argument('--save_dir', type=str, default='logs', help='Directory to save outputs')
+    parser.add_argument('--resume', action='store_true', help='Resume training from checkpoint')
+    parser.add_argument('--checkpoint-path', type=str, help='Specific checkpoint path to resume from')
+
+    # General way to override any configuration item in the configuration file
+    parser.add_argument('--config-override', nargs='+', action='append', 
+                        help='Override config values. Format: section.key=value')
     
     return parser.parse_args()
 
 def main():
-    # Parse arguments
+    # Parse command line arguments
     args = parse_args()
     
+    config = get_config(args)
     # Set random seed
-    L.seed_everything(args.seed, workers=True)
-    
-    # Define camera IDs
-    camera_ids = [
-        SourceCameraId.FRONT_CENTER_CAMERA,
-        SourceCameraId.FRONT_LEFT_CAMERA,
-        SourceCameraId.FRONT_RIGHT_CAMERA,
-        SourceCameraId.SIDE_LEFT_CAMERA,
-        SourceCameraId.SIDE_RIGHT_CAMERA,
-        SourceCameraId.REAR_LEFT_CAMERA,
-        SourceCameraId.REAR_RIGHT_CAMERA
-    ]
+    L.seed_everything(config.training.seed, workers=True)
     
     # Create data module
     datamodule = E2EPerceptionDataModule(
-        train_list=args.train_list,
-        val_list=args.val_list,
-        camera_ids=camera_ids,
-        batch_size=args.batch_size,
-        num_workers=args.num_workers
+        train_list=config.training.train_list,
+        val_list=config.training.val_list,
+        batch_size=config.training.batch_size,
+        num_workers=config.training.num_workers,
+        camera_ids=config.data.camera_ids
     )
     
     # Create model
     model = E2EPerceptionModule(
-        camera_ids=camera_ids,
-        feature_dim=args.feature_dim,
-        num_queries=args.num_queries,
-        num_decoder_layers=args.num_decoder_layers,
-        learning_rate=args.learning_rate,
-        weight_decay=args.weight_decay,
-        max_epochs=args.max_epochs,
-        use_pretrained=args.pretrained_weights,
-        backbone=args.backbone
+        camera_ids=config.data.camera_ids,
+        feature_dim=config.model.feature_dim,
+        num_queries=config.model.num_queries,
+        num_decoder_layers=config.model.num_decoder_layers,
+        backbone=config.model.backbone,
+        learning_rate=config.training.learning_rate,
+        weight_decay=config.training.weight_decay,
+        use_pretrained=config.training.pretrained_weights if not hasattr(args, 'pretrained_weights') or args.pretrained_weights is None else args.pretrained_weights
     )
     
     # Create loggers
+    experiment_name = args.experiment_name if args.experiment_name else f"e2e_perception_{time.strftime('%Y%m%d')}"
+    save_dir = args.save_dir if args.save_dir else config.logging.log_dir
+    
     tb_logger = TensorBoardLogger(
-        save_dir=args.save_dir,
-        name=args.experiment_name,
+        save_dir=save_dir,
+        name=experiment_name,
         default_hp_metric=False
     )
     csv_logger = CSVLogger(
-        save_dir=args.save_dir,
-        name=args.experiment_name
+        save_dir=save_dir,
+        name=experiment_name
     )
     wandb_logger = WandbLogger(
         project='e2e_perception',
-        name=args.experiment_name,
-        save_dir=args.save_dir
+        name=experiment_name,
+        save_dir=save_dir
     )
     
     # Create callbacks
     checkpoint_callback = ModelCheckpoint(
-        dirpath=os.path.join(args.save_dir, args.experiment_name, 'checkpoints'),
-        filename='{epoch}-{val_loss:.2f}',
-        save_top_k=3,
-        monitor='val/loss',
-        mode='min'
+        dirpath=config.logging.checkpoint_dir,
+        filename='epoch{epoch:02d}',
+        save_top_k=-1,  # Save all checkpoints
+        save_last=True  # Save the last checkpoint as last.ckpt
     )
+    
+    # Get checkpoint path
+    checkpoint_path = get_checkpoint_path(config, args)
     
     # Create trainer
     trainer = L.Trainer(
-        accelerator=args.accelerator,
-        devices=args.devices,
-        precision=args.precision,
-        max_epochs=args.max_epochs,
+        max_epochs=config.training.max_epochs,
+        accelerator=config.training.accelerator,
+        devices=config.training.devices,
+        precision=config.training.precision,
         logger=[tb_logger, csv_logger, wandb_logger],
         callbacks=[checkpoint_callback],
-        gradient_clip_val=0.5,
-        accumulate_grad_batches=args.accumulate_grad_batches,
-        deterministic=True
+        gradient_clip_val=config.training.gradient_clip_val,
+        accumulate_grad_batches=config.training.accumulate_grad_batches,
+        deterministic=True,
     )
     
     # Train model
-    if args.resume:
-        trainer.fit(model, datamodule, ckpt_path=args.resume)
-    else:
-        trainer.fit(model, datamodule)
+    trainer.fit(model, datamodule=datamodule, ckpt_path=checkpoint_path)
+
+def get_checkpoint_path(config, args):
+    """Get checkpoint path"""
+    if args.checkpoint_path:
+        return args.checkpoint_path
+    
+    checkpoint_path = os.path.join(config.logging.checkpoint_dir, config.logging.checkpoint_file)
+    if args.resume and os.path.exists(checkpoint_path):
+        return checkpoint_path
+    
+    return None
 
 if __name__ == '__main__':
-    main() 
+    main()
+    

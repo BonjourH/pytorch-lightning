@@ -23,6 +23,9 @@ class SourceCameraId(IntEnum):
     STITCH_CAMERA = 20
     BEV_CAMERA = 21
     
+    def __str__(self):
+        return self.name
+    
 class CameraType(IntEnum):
     UNKNOWN = 0
     PINHOLE = 1
