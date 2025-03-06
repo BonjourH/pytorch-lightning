@@ -213,3 +213,10 @@ tb_logs/
 *train_clips.txt*
 *val_clips.txt*
 *test_list.txt*
+*logs*
+*.log
+*.log.*
+*.log.*.*
+*.log.*.*.*
+*.log.*.*.*.*
+*.log.*.*.*.*.*

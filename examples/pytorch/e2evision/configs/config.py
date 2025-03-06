@@ -35,7 +35,7 @@ class DataConfig(ConfigBase):
     test_list: str = "test_list.txt"
     sequence_length: int = 10
     batch_size: int = 1
-    num_workers: int = 4
+    num_workers: int = 20
     image_size: tuple = (800, 416)
     normalize_mean: tuple = (0.485, 0.456, 0.406)
     normalize_std: tuple = (0.229, 0.224, 0.225)
@@ -95,9 +95,31 @@ class InferenceConfig(ConfigBase):
 class LoggingConfig(ConfigBase):
     """Logging and checkpoint configuration"""
     log_dir: str = 'logs'
-    results_dir: str = 'results'
     checkpoint_dir: str = 'checkpoints'
-    checkpoint_file: str = 'model_last.ckpt'
+    save_top_k: int = 3
+    # Logger options
+    use_tensorboard: bool = True
+    use_csv: bool = True
+    use_wandb: bool = True
+    wandb_project: str = 'e2e_perception'
+    run_id: Optional[int] = 0
+    # Progress bar options
+    progress_bar_metrics: List[str] = field(default_factory=lambda: [
+        'v_num', 
+        'train/loss_step', 
+        'train/loss_epoch',
+        'train/layer_6_loss_exist_epoch',
+        'val/loss',
+        'epoch',
+        'step'
+    ])
+    # Wandb logger options
+    use_optional_metrics: bool = True
+    wandb_log_metrics: List[str] = field(default_factory=lambda: [
+        'train/loss_epoch', 
+        'train/layer_6_loss_exist_epoch',
+        'val/loss'
+    ])
 
 
 @dataclass

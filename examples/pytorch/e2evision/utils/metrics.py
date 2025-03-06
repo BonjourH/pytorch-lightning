@@ -2,6 +2,79 @@ import torch
 import torch.nn.functional as F
 from typing import Dict, Tuple
 import numpy as np
+from lightning.pytorch.loggers import WandbLogger
+from lightning.pytorch.callbacks import TQDMProgressBar, RichProgressBar
+from tqdm import tqdm
+
+
+class FilteredProgressBar(TQDMProgressBar):
+    """自定义进度条，只显示特定的指标"""
+    
+    def __init__(self, refresh_rate: int = 1, process_position: int = 0, metrics_to_display=None):
+        super().__init__(refresh_rate, process_position)
+        # 定义要显示的指标列表
+        self.metrics_to_display = metrics_to_display or [
+            'train/loss_step', 
+            'train/loss_epoch',
+            'train/layer_6_loss_exist_epoch',
+            'val/loss',
+            'epoch',
+            'step'
+        ]
+    
+    def init_train_tqdm(self):
+        return tqdm(
+            desc="Training",
+            total=self.total_train_batches,
+            leave=True,       # 保留所有进度条
+            dynamic_ncols=True,
+            unit="batch",
+            disable=self.is_disabled,
+            position=0,       # 固定位置
+            postfix=self.metrics_to_display  # 显示指标
+        )
+    
+    def get_metrics(self, trainer, pl_module):
+        # 获取所有指标
+        items = super().get_metrics(trainer, pl_module)
+        # 过滤指标，只保留我们想要显示的
+        filtered_items = {}
+        
+        basic_metrics = ['epoch', 'step']
+        
+        # 首先添加基本指标
+        for basic_metric in basic_metrics:
+            if basic_metric in items:
+                filtered_items[basic_metric] = items[basic_metric]
+        
+        # 然后添加配置中指定的指标
+        for k, v in items.items():
+            if k in self.metrics_to_display:
+                if k in basic_metrics:
+                    continue
+                filtered_items[k] = v
+        
+        return filtered_items
+
+
+class E2EPerceptionWandbLogger(WandbLogger):
+    def __init__(self, *args, keys_to_log=None, use_optional_metrics=False, **kwargs):
+        super().__init__(*args, **kwargs)
+        # 定义要记录的指标列表
+        self.keys_to_log = keys_to_log or [
+            'train/loss_epoch', 
+            'train/layer_6_loss_exist_epoch'
+        ]
+        self.use_optional_metrics = use_optional_metrics
+    
+    def log_metrics(self, metrics, step=None):
+        # 只记录特定的键
+        if self.use_optional_metrics:
+            metrics_to_log = {key: metrics[key] for key in self.keys_to_log if key in metrics}
+        else:
+            metrics_to_log = metrics
+        super().log_metrics(metrics_to_log, step)
+
 
 def compute_trajectory_metrics(pred_trajs: torch.Tensor,
                             gt_trajs: torch.Tensor,
