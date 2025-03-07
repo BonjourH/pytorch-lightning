@@ -126,11 +126,13 @@ class TrainingConfig(ConfigBase):
     accumulate_grad_batches: int = 4
     seed: int = 42
     pretrained_weights: bool = True
-    limit_val_batches: float = 1.0  # 1.0: validate all batches, 0.1: validate 10% of batches
+    limit_val_batches: float = 0.1  # 1.0: validate all batches, 0.1: validate 10% of batches
     # 优化器配置
     learning_rate: float = 1e-4
     weight_decay: float = 1e-4
     gradient_clip_val: float = 0.5
+    use_checkpoint: bool = True
+    log_every_n_steps: int = 30
 
 
 @dataclass

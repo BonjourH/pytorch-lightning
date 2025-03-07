@@ -109,6 +109,7 @@ def main():
         deterministic=True,
         enable_progress_bar=True,
         limit_val_batches=config.training.limit_val_batches,
+        log_every_n_steps=config.training.log_every_n_steps
     )
     
     # Get checkpoint path

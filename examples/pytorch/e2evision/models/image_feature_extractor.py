@@ -170,6 +170,12 @@ class FPNImageFeatureExtractor(nn.Module):
                 'channels': [64, 64, 128, 256],
                 'scales': [2, 4, 8, 16]
             },
+            'repvgg_a2': {
+                'type': 'timm',
+                'model': 'repvgg_a2',
+                'channels': [64, 96, 192, 384, 1408],
+                'scales': [2, 4, 8, 16, 32]
+            },
             'convnext_tiny': {
                 'type': 'timm',
                 'model': 'convnext_tiny', 

@@ -9,9 +9,9 @@ EXP_NAME="e2e_perception_${TIMESTAMP}"
 # Note: These parameters will override those in the configuration file
 TRAIN_LIST=${TRAIN_LIST:-"train_clips.txt"}
 VAL_LIST=${VAL_LIST:-"val_clips.txt"}
-BATCH_SIZE=${BATCH_SIZE:-1}
-NUM_WORKERS=${NUM_WORKERS:-20}
-MAX_EPOCHS=${MAX_EPOCHS:-100}
+BATCH_SIZE=${BATCH_SIZE:-1}  # 默认减小批量大小为1
+NUM_WORKERS=${NUM_WORKERS:-20}  # 默认减少工作线程数为4
+MAX_EPOCHS=${MAX_EPOCHS:-50}
 ACCELERATOR=${ACCELERATOR:-"gpu"}
 DEVICES=${DEVICES:-1}
 PRECISION=${PRECISION:-"16-mixed"} # 16-mixed, 32, 64
@@ -24,6 +24,8 @@ RUN_ID=${RUN_ID:-0}
 CONFIG_FILE=${CONFIG_FILE:-"configs/e2e_perception.yaml"}
 VALIDATE_ONLY=${VALIDATE_ONLY:-0}  # 0: train and validate, 1: validate only
 LIMIT_VAL_BATCHES=${LIMIT_VAL_BATCHES:-1.0}  # 1.0: validate all batches, 0.1: validate 10% of batches
+GRADIENT_CLIP_VAL=${GRADIENT_CLIP_VAL:-1.0}  # 添加梯度裁剪值
+MEMORY_EFFICIENT=${MEMORY_EFFICIENT:-1}  # 添加内存效率选项
 # Create log directory
 LOG_DIR="logs/${EXP_NAME}"
 CHECKPOINT_DIR="checkpoints/${EXP_NAME}"
@@ -67,6 +69,15 @@ LOG_FILE="${LOG_DIR}/${EXP_NAME}.log"
 
     echo -e "\n======== Training Start ========"
     
+    # Add memory optimization options
+    if [ "${MEMORY_EFFICIENT}" = "1" ]; then
+        echo "Enabling memory optimization options"
+        # Set environment variables for PyTorch memory efficiency
+        export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128
+        # Disable CUDA graph capture which can use extra memory
+        export CUDA_LAUNCH_BLOCKING=1
+    fi
+
     # Build training command
     TRAIN_CMD="python train.py"
     TRAIN_CMD="${TRAIN_CMD} --config_file ${CONFIG_FILE}"
@@ -96,7 +107,8 @@ LOG_FILE="${LOG_DIR}/${EXP_NAME}.log"
     CONFIG_OVERRIDES+=("training.seed=${SEED}")
     CONFIG_OVERRIDES+=("training.pretrained_weights=${PRETRAINED_WEIGHTS}")
     CONFIG_OVERRIDES+=("training.limit_val_batches=${LIMIT_VAL_BATCHES}")
-    CONFIG_OVERRIDES+=("model.decoder.num_queries=${NUM_QUERIES}")
+    CONFIG_OVERRIDES+=("training.gradient_clip_val=${GRADIENT_CLIP_VAL}")  # 添加梯度裁剪配置
+    CONFIG_OVERRIDES+=("model.memory_efficient=${MEMORY_EFFICIENT}")  # 添加内存效率配置
     CONFIG_OVERRIDES+=("logging.checkpoint_dir=${CHECKPOINT_DIR}")
     CONFIG_OVERRIDES+=("logging.log_dir=${LOG_DIR}")
     CONFIG_OVERRIDES+=("logging.run_id=${RUN_ID}")

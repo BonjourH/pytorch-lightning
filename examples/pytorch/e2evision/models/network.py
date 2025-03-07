@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 from typing import Dict, List, Optional
 import numpy as np
+import torch.utils.checkpoint as checkpoint
 
 from base import SourceCameraId, TrajParamIndex, ObjectType, CameraParamIndex, EgoStateIndex
 from .components import TrajectoryDecoder
@@ -13,7 +14,7 @@ from configs.config import ModelConfig, DataConfig
 class E2EPerceptionNet(nn.Module):
     """End-to-end perception network."""
     
-    def __init__(self, model_config: ModelConfig, data_config: DataConfig):
+    def __init__(self, model_config: ModelConfig, data_config: DataConfig, use_checkpoint: bool = True):
         super().__init__()
         
         # Create feature extractors for each camera group
@@ -38,6 +39,19 @@ class E2EPerceptionNet(nn.Module):
                                         model_config.decoder.feature_dim,
                                         model_config.decoder.hidden_dim,
                                         model_config.decoder.num_points)
+        
+        # Enable gradient checkpointing for memory efficiency
+        self.use_checkpoint = use_checkpoint
+    
+    def _extract_features(self, name, imgs):
+        """Extract features from images using the specified feature extractor."""
+        B, T, N_cams, C, H, W = imgs.shape
+        imgs = imgs.view(B * T * N_cams, C, H, W)
+        feat = self.feature_extractors[name](imgs)
+        down_scale = self.feature_extractors[name].downsample_scale
+        output_channels = self.feature_extractors[name].out_channels
+        feat = feat.view(B, T, N_cams, output_channels, H // down_scale, W // down_scale)
+        return feat
     
     def forward(self, batch: Dict) -> List[Dict[str, torch.Tensor]]:
         """Forward pass.
@@ -52,15 +66,14 @@ class E2EPerceptionNet(nn.Module):
             List of decoder outputs at each layer
         """
         
-        # Extract features from each camera
+        # Extract features from each camera with gradient checkpointing
         all_features_dict = {}
         for name, imgs in batch['images'].items():
-            B, T, N_cams, C, H, W = imgs.shape
-            imgs = imgs.view(B * T * N_cams, C, H, W)
-            feat = self.feature_extractors[name](imgs)
-            down_scale = self.feature_extractors[name].downsample_scale
-            output_channels = self.feature_extractors[name].out_channels
-            feat = feat.view(B, T, N_cams, output_channels, H // down_scale, W // down_scale)
+            if self.use_checkpoint:
+                feat = checkpoint.checkpoint(self._extract_features, name, imgs, use_reentrant=False)
+            else:
+                feat = self._extract_features(name, imgs)
+                
             for idx, camera_id in enumerate(self.feature_extractors[name].camera_ids):
                 all_features_dict[camera_id] = feat[:, :, idx]
         
@@ -71,5 +84,10 @@ class E2EPerceptionNet(nn.Module):
         
         # Decode trajectories
         outputs = self.decoder(fused_features_dict, batch['calibrations'], batch['ego_states'])
+        
+        # Clear intermediate tensors to save memory
+        del all_features_dict
+        del fused_features_dict
+        torch.cuda.empty_cache()
         
         return outputs 

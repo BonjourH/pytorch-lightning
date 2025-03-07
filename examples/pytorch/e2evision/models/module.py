@@ -17,7 +17,7 @@ class E2EPerceptionModule(L.LightningModule):
         # self.save_hyperparameters()
         self.config = config
         # Create network
-        self.net = E2EPerceptionNet(config.model, config.data)
+        self.net = E2EPerceptionNet(config.model, config.data, config.training.use_checkpoint)
         
         # Create loss function
         self.criterion = TrajectoryLoss(config.loss)
