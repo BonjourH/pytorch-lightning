@@ -12,3 +12,4 @@ wandb
 tensorboard
 weave
 easydict
+timm

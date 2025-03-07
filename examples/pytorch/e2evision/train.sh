@@ -1,6 +1,10 @@
 #!/bin/bash
 set -euo pipefail  # Strict error handling mode
 
+# Create a timestamped experiment name
+TIMESTAMP=$(date +%Y%m%d || echo "default")
+EXP_NAME="e2e_perception_${TIMESTAMP}"
+
 # Training parameters, can be overridden by environment variables
 # Note: These parameters will override those in the configuration file
 TRAIN_LIST=${TRAIN_LIST:-"train_clips.txt"}
@@ -12,23 +16,19 @@ ACCELERATOR=${ACCELERATOR:-"gpu"}
 DEVICES=${DEVICES:-1}
 PRECISION=${PRECISION:-"16-mixed"}
 ACCUMULATE_GRAD_BATCHES=${ACCUMULATE_GRAD_BATCHES:-4}
-BACKBONE=${BACKBONE:-"resnet18"}
+BACKBONE=${BACKBONE:-"repvgg_a0"}
 NUM_QUERIES=${NUM_QUERIES:-16}
 SEED=${SEED:-42}
-RESUME=${RESUME:-1}
+RESUME=${RESUME:-0}
 PRETRAINED_WEIGHTS=${PRETRAINED_WEIGHTS:-"true"}
 RUN_ID=${RUN_ID:-0}
 CONFIG_FILE=${CONFIG_FILE:-"configs/e2e_perception.yaml"}
 VALIDATE_ONLY=${VALIDATE_ONLY:-0}  # 0: train and validate, 1: validate only
 LIMIT_VAL_BATCHES=${LIMIT_VAL_BATCHES:-1.0}  # 1.0: validate all batches, 0.1: validate 10% of batches
 # Create log directory
-LOG_DIR="logs"
-CHECKPOINT_DIR="checkpoints"
+LOG_DIR="logs/${EXP_NAME}"
+CHECKPOINT_DIR="checkpoints/${EXP_NAME}"
 mkdir -p "${LOG_DIR}" "${CHECKPOINT_DIR}"
-
-# Create a timestamped experiment name
-TIMESTAMP=$(date +%Y%m%d || echo "default")
-EXP_NAME="e2e_perception_${TIMESTAMP}"
 
 # Set log file
 LOG_FILE="${LOG_DIR}/${EXP_NAME}.log"
@@ -73,6 +73,7 @@ LOG_FILE="${LOG_DIR}/${EXP_NAME}.log"
     TRAIN_CMD="python train.py"
     TRAIN_CMD="${TRAIN_CMD} --config_file ${CONFIG_FILE}"
     TRAIN_CMD="${TRAIN_CMD} --experiment_name ${EXP_NAME}"
+    TRAIN_CMD="${TRAIN_CMD} --resume ${RESUME}"
     
     # Add validate-only flag if needed
     if [ "${VALIDATE_ONLY}" = "1" ]; then
@@ -84,7 +85,6 @@ LOG_FILE="${LOG_DIR}/${EXP_NAME}.log"
     CONFIG_OVERRIDES=()
     
     # Add each parameter to the override array
-    CONFIG_OVERRIDES+=("resume=${RESUME}")
     CONFIG_OVERRIDES+=("validate_only=${VALIDATE_ONLY}")
     CONFIG_OVERRIDES+=("training.train_list=${TRAIN_LIST}")
     CONFIG_OVERRIDES+=("training.val_list=${VAL_LIST}")

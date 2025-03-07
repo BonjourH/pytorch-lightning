@@ -33,6 +33,7 @@ def parse_args():
     # Important control parameters
     parser.add_argument('--experiment_name', type=str, help='Name of the experiment')
     parser.add_argument('--validate_only', action='store_true', help='Only run validation, no training')
+    parser.add_argument('--resume', type=bool, default=False, help='Resume training from the last checkpoint')
     
     # General way to override any configuration item in the configuration file
     parser.add_argument('--config-override', nargs='+', action='append', 
@@ -121,13 +122,16 @@ def main():
     
     # Get checkpoint path
     checkpoint_path = os.path.join(config.logging.checkpoint_dir, 'last.ckpt')
-    # Run validation only or train model
-    if args.validate_only and os.path.exists(checkpoint_path):
-        print("Running validation only...")
-        trainer.validate(model, datamodule=datamodule, ckpt_path=checkpoint_path)
+    
+    if os.path.exists(checkpoint_path) and args.resume:
+        if args.validate_only:
+            print("Running validation only...")
+            trainer.validate(model, datamodule=datamodule, ckpt_path=checkpoint_path)
+        else:
+            print("Starting training...")
+            trainer.fit(model, datamodule=datamodule, ckpt_path=checkpoint_path)
     else:
-        print("Starting training...")
-        trainer.fit(model, datamodule=datamodule, ckpt_path=checkpoint_path)
+        trainer.fit(model, datamodule=datamodule)
 
 if __name__ == '__main__':
     main()

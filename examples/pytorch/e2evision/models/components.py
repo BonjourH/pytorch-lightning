@@ -4,48 +4,117 @@ import torchvision.models as models
 from typing import Dict, Optional, List
 import numpy as np
 import torch.nn.functional as F
+from timm.models import create_model
 
 from base import SourceCameraId, TrajParamIndex, CameraParamIndex, EgoStateIndex, CameraType
 
 class ImageFeatureExtractor(nn.Module):
-    """Image feature extraction module."""
-    def __init__(self, out_channels: int = 256, use_pretrained: bool = False, backbone: str = 'resnet50'):
+    """Image feature extraction module with flexible backbone support."""
+    def __init__(
+        self,
+        out_channels: int = 256,
+        use_pretrained: bool = False,
+        backbone: str = 'resnet18',
+    ):
         super().__init__()
         
-        # 选择backbone
-        if backbone == 'resnet18':
-            # 使用更轻量级的ResNet18
-            if use_pretrained:
-                resnet = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
-            else:
-                resnet = models.resnet18(weights=None)
-            self.channel_adjust = nn.Conv2d(512, out_channels, 1)  # ResNet18输出512通道
-        elif backbone == 'resnet34':
-            if use_pretrained:
-                resnet = models.resnet34(weights=models.ResNet34_Weights.DEFAULT)
-            else:
-                resnet = models.resnet34(weights=None)
-            self.channel_adjust = nn.Conv2d(512, out_channels, 1)  # ResNet34输出512通道
-        else:  # 默认使用ResNet50
-            # Use ResNet50 as backbone with weights parameter based on use_pretrained flag
-            if use_pretrained:
-                resnet = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
-            else:
-                # Skip downloading weights if not using pretrained
-                resnet = models.resnet50(weights=None)
-            self.channel_adjust = nn.Conv2d(2048, out_channels, 1)  # ResNet50输出2048通道
+        # 扩展支持的 backbone 列表（新增轻量化大感受野模型）
+        self.supported_backbones = {
+            # ==================== torchvision 模型 ====================
+            'resnet18': {'model': models.resnet18, 'weights': models.ResNet18_Weights.DEFAULT, 'out_features': 512},
+            'resnet50': {'model': models.resnet50, 'weights': models.ResNet50_Weights.DEFAULT, 'out_features': 2048},
+            'mobilenet_v2': {'model': models.mobilenet_v2, 'weights': models.MobileNet_V2_Weights.DEFAULT, 'out_features': 1280},
+            'mobilenet_v3_small': {'model': models.mobilenet_v3_small, 'weights': models.MobileNet_V3_Small_Weights.DEFAULT, 'out_features': 576},
+            # ==================== timm 模型 ====================
+            'efficientnet_b0': {'model': 
+                'efficientnet_b0', 
+                'out_features': 1280,
+                'features_only': True,
+                'pretrained_cfg': 'efficientnet_b0.a1_in1k'
+            },
+            'efficientnet_b1': {'model': 'efficientnet_b1', 
+                'out_features': 1280,
+                'features_only': True,
+                'pretrained_cfg': 'efficientnet_b1.a1_in1k'
+            },
+            'repvgg_a0': {'model': 'repvgg_a0', 
+                'out_features': 1280,
+                'features_only': True,
+                'pretrained_cfg': 'repvgg_a0.a1_in1k'
+            },
+            'repvgg_a1': {
+                'model': 'repvgg_a1', 
+                'out_features': 1280,
+                'features_only': True,
+                'pretrained_cfg': 'repvgg_a1.a1_in1k'
+            },
+            'convnext_tiny': {
+                'model': 'convnext_tiny', 
+                'out_features': 768,
+                'features_only': True,
+                'pretrained_cfg': 'convnext_tiny.a1_in1k'
+            },
+            'mobilevitv2_050': {  # MobileViT V2 (0.5x)
+                'model': 'mobilevitv2_050',
+                'out_features': 256,
+                'features_only': True,
+                'pretrained_cfg': 'mobilevitv2_050.a1_in1k'
+            },
+            'efficientformerv2_s0': {  # EfficientFormerV2 Small
+                'model': 'efficientformerv2_s0',
+                'out_features': 256,
+                'features_only': True,
+                'pretrained_cfg': 'efficientformerv2_s0.a1_in1k'
+            },
+            'mobileone_s0': {  # MobileOne-S0
+                'model': 'mobileone_s0',
+                'out_features': 1024,
+                'features_only': True,
+                'pretrained_cfg': 'mobileone_s0.a1_in1k'
+            },
+            'ghostnet_100': {  # GhostNet 1.0x
+                'model': 'ghostnet_100',
+                'out_features': 1280,
+                'features_only': True,
+                'pretrained_cfg': 'ghostnet_100.a1_in1k'
+            },
+        }
         
-        # Remove classification head
-        self.backbone = nn.Sequential(*list(resnet.children())[:-2])
+        # 检查 backbone 是否支持
+        if backbone not in self.supported_backbones:
+            raise ValueError(f"Unsupported backbone: {backbone}. Supported: {list(self.supported_backbones.keys())}")
         
+        # 加载 backbone
+        model_info = self.supported_backbones[backbone]
+        if 'weights' in model_info:  # torchvision 模型
+            self.backbone = model_info['model'](weights=model_info['weights'] if use_pretrained else None)
+            if 'resnet' in backbone:
+                self.backbone = nn.Sequential(*list(self.backbone.children())[:-2])
+            elif 'mobilenet' in backbone:
+                self.backbone = nn.Sequential(*list(self.backbone.children())[:-1])
+        else:  # timm 模型
+            self.backbone = create_model(
+                model_info['model'],
+                pretrained=use_pretrained,
+                features_only=True,
+                out_indices=[-1],  # 默认取最后一层特征
+                **({'pretrained_cfg': model_info['pretrained_cfg']} if use_pretrained else {})
+            )
+        
+        # 获取输出通道数
+        out_features = model_info['out_features']
+        
+         # 通道调整层（新增动态卷积核大小支持）
+        self.channel_adjust = nn.Sequential(
+            nn.Conv2d(out_features, out_channels, kernel_size=1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True)
+        )
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            x: Input tensor [B, C, H, W]
-        Returns:
-            Features [B, out_channels, H/32, W/32]
-        """
         x = self.backbone(x)
+        if isinstance(x, (list, tuple)):  # 处理 timm 的多尺度输出
+            x = x[-1]
         x = self.channel_adjust(x)
         return x
 
