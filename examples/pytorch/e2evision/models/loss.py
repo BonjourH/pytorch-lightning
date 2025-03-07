@@ -6,6 +6,7 @@ import numpy as np
 from scipy.optimize import linear_sum_assignment
 
 from base import TrajParamIndex
+from configs.config import LossConfig
 
 def match_trajectories(
     pred_trajs: torch.Tensor,
@@ -83,172 +84,254 @@ def match_trajectories(
 class TrajectoryLoss(nn.Module):
     """Loss function for trajectory prediction."""
     
-    def __init__(self, 
-                 weight_dict=None,
-                 frames: int = 10,
-                 dt: float = 0.1,
-                 iou_method: str = "iou2",
-                 aux_loss_weight: float = 0.5):
+    def __init__(self, config: LossConfig):
         super().__init__()
         
-        # Set loss weights
-        self.weight_dict = weight_dict or {
-            'loss_pos': 1.0,      # 位置损失权重
-            'loss_vel': 1.0,      # 速度损失权重
-            'loss_acc': 1.0,      # 加速度损失权重
-            'loss_dim': 1.0,      # 尺寸损失权重
-            'loss_yaw': 1.0,      # 偏航角损失权重
-            'loss_type': 0.1,     # 类型损失权重
-            'loss_attr': 0.1,     # 属性损失权重
-            'fp_loss_exist': 1.0, # 假阳性存在损失权重
-        }
-        
-        self.layer_loss_weights = [0.3, 0.5, 0.7, 0.9, 1.1, 1.3, 1.5]
-        
-        self.frames = frames
-        self.dt = dt
-        self.iou_method = iou_method
+        self.config = config
+        self.weight_dict = config.weight_dict
     
-    def forward(self, outputs: List[Dict], targets: Dict) -> Dict:
-        """Forward pass.
-        
-        Args:
-            outputs: List of decoder outputs at each layer
-            targets: Ground truth
-            
-        Returns:
-            Dictionary of losses
-        """
-        # Initialize losses
+    def forward(self, outputs: List[torch.Tensor], targets: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        """Forward pass to compute losses."""
         losses = {}
         
         # Process each decoder layer
         num_layers = len(outputs)
+        
+        # 只在最后一层进行匹配，获取匹配索引
+        final_layer_idx = num_layers - 1
+        final_pred_trajs = outputs[final_layer_idx]  # [B, N, TrajParamIndex.END_OF_INDEX]
+        gt_trajs = targets['trajs']  # [B, M, TrajParamIndex.END_OF_INDEX]
+        
+        # 计算最后一层的匹配结果
+        indices_list = []
+        for b in range(final_pred_trajs.shape[0]):
+            # 获取当前批次的预测和真实轨迹
+            pred_trajs_b = final_pred_trajs[b]  # [N, TrajParamIndex.END_OF_INDEX]
+            gt_trajs_b = gt_trajs[b]  # [M, TrajParamIndex.END_OF_INDEX]
+            
+            # 计算匹配代价矩阵
+            cost_matrix = self._compute_matching_cost(pred_trajs_b, gt_trajs_b)
+            
+            # 使用匈牙利算法进行匹配
+            indices = linear_sum_assignment(cost_matrix.detach().cpu().numpy())
+            indices_list.append(indices)
+        
+        # 使用相同的匹配结果计算每一层的损失
         for idx, pred_trajs in enumerate(outputs):
-            # [B, N, TrajParamIndex.END_OF_INDEX]
-            
-            # Get targets
-            gt_trajs = targets['trajs']  # [B, M, TrajParamIndex.END_OF_INDEX]
-            
-            # Compute losses for this layer
-            layer_losses = self._compute_losses(
+            if idx < final_layer_idx - 2:
+                continue
+            # 使用最后一层的匹配结果计算当前层的损失
+            layer_losses = self._compute_losses_with_indices(
                 pred_trajs=pred_trajs,
                 gt_trajs=gt_trajs,
+                indices_list=indices_list,
                 prefix=f'layer_{idx}_'
             )
             
             losses.update(layer_losses)
         
-        # Weight and sum all losses
-        weighted_losses = {}
-        for k, v in losses.items():
-            layer_idx = int(k.split('_')[1])
-            post_fix = "_".join(k.split('_')[2:])
-            weight = self.weight_dict[post_fix] * self.layer_loss_weights[layer_idx]
-            weighted_losses[k] = weight * v
+        # 计算总损失
+        total_loss = sum(losses.values())
+        losses['loss'] = total_loss
         
-        # Calculate total loss
-        total_loss = sum(weighted_losses.values())
-        weighted_losses['loss'] = total_loss
-        
-        return weighted_losses
+        return losses
     
-    def _compute_losses(self, 
-                       pred_trajs: torch.Tensor, 
-                       gt_trajs: torch.Tensor,
-                       prefix: str = '') -> Dict[str, torch.Tensor]:
-        """Compute losses for a single decoder layer.
-        
-        Args:
-            pred_trajs: Predicted trajectories [B, N, TrajParamIndex.END_OF_INDEX]
-            gt_trajs: Ground truth trajectories [B, M, TrajParamIndex.END_OF_INDEX]
-            prefix: Prefix for loss names
-            
-        Returns:
-            Dictionary of losses
-        """
-        B = pred_trajs.shape[0]
-        device = pred_trajs.device
+    def _compute_losses_with_indices(self, pred_trajs, gt_trajs, indices_list, prefix=''):
+        """使用给定的匹配索引计算损失。"""
         losses = {}
+        batch_size = pred_trajs.shape[0]
         
-        # Process each batch
-        for b in range(B):
-            valid_targets = gt_trajs[b][gt_trajs[b, :, TrajParamIndex.HAS_OBJECT] > 0.5]
+        # 初始化各类损失
+        pos_loss = 0
+        dim_loss = 0
+        vel_loss = 0
+        yaw_loss = 0
+        type_loss = 0
+        fp_loss_exist = 0  # 假阳性损失
+        loss_acc = 0
+        loss_attr = 0
+        
+        total_objects = 0
+        total_fp = 0  # 跟踪假阳性总数
+        
+        for b in range(batch_size):
+            pred_idx, gt_idx = indices_list[b]
             
-            # Match trajectories
-            matches, unmatched_pred_indices, cost_matrix = match_trajectories(
-                pred_trajs[b],
-                valid_targets,
-                frames=self.frames,
-                dt=self.dt,
-                iou_method=self.iou_method
+            # 获取匹配的预测和真实轨迹
+            pred_matched = pred_trajs[b, pred_idx]  # [K, TrajParamIndex.END_OF_INDEX]
+            gt_matched = gt_trajs[b, gt_idx]  # [K, TrajParamIndex.END_OF_INDEX]
+            
+            # 计算各项损失
+            # 位置损失 (x, y, z) - 使用L1损失
+            pos_loss += F.l1_loss(
+                pred_matched[:, TrajParamIndex.X:TrajParamIndex.Z+1],
+                gt_matched[:, TrajParamIndex.X:TrajParamIndex.Z+1]
             )
             
-            # For the unmatched pred traj, we only penalize the existence loss
-            if unmatched_pred_indices:
-                pred_unmatched = pred_trajs[b][torch.tensor(unmatched_pred_indices, device=device)]
-                exist_loss = F.binary_cross_entropy_with_logits(
-                    pred_unmatched[:, TrajParamIndex.HAS_OBJECT],
-                    torch.zeros_like(pred_unmatched[:, TrajParamIndex.HAS_OBJECT])
-                )
-                losses[f'{prefix}fp_loss_exist'] = exist_loss
+            # 尺寸损失 (length, width, height) - 使用L1损失
+            dim_loss += F.l1_loss(
+                pred_matched[:, TrajParamIndex.LENGTH:TrajParamIndex.HEIGHT+1],
+                gt_matched[:, TrajParamIndex.LENGTH:TrajParamIndex.HEIGHT+1]
+            )
             
-            # For the matched pred traj, we add the loss for all the predictions
-            if matches:
-                pred_matched = pred_trajs[b][torch.tensor(list(zip(*matches))[0], device=device)]
-                target_matched = valid_targets[torch.tensor(list(zip(*matches))[1], device=device)]
-                # Trajectory parameter loss
-                # Position loss
-                pos_loss = F.l1_loss(
-                    pred_matched[:, [TrajParamIndex.X, TrajParamIndex.Y, TrajParamIndex.Z]],
-                    target_matched[:, [TrajParamIndex.X, TrajParamIndex.Y, TrajParamIndex.Z]]
-                )
-                losses[f'{prefix}loss_pos'] = pos_loss
+            # 速度损失 (vx, vy) - 使用L1损失
+            vel_loss += F.l1_loss(
+                pred_matched[:, TrajParamIndex.VX:TrajParamIndex.VY+1],
+                gt_matched[:, TrajParamIndex.VX:TrajParamIndex.VY+1]
+            )
+            
+            # 加速度损失 (ax, ay) - 使用L1损失
+            loss_acc += F.l1_loss(
+                pred_matched[:, TrajParamIndex.AX:TrajParamIndex.AY+1],
+                gt_matched[:, TrajParamIndex.AX:TrajParamIndex.AY+1]
+            )
+            
+            # 朝向损失 (yaw) - 使用L1损失
+            yaw_loss += F.l1_loss(
+                pred_matched[:, TrajParamIndex.YAW:TrajParamIndex.YAW+1],
+                gt_matched[:, TrajParamIndex.YAW:TrajParamIndex.YAW+1]
+            )
+            
+            # 属性损失 (static, occluded) - 保留BCE损失，因为这是二元属性
+            loss_attr += F.binary_cross_entropy_with_logits(
+                pred_matched[:, TrajParamIndex.STATIC:TrajParamIndex.OCCLUDED+1],
+                gt_matched[:, TrajParamIndex.STATIC:TrajParamIndex.OCCLUDED+1]
+            )
+            
+            # 类型损失 (one-hot encoded object type) - 保留BCE损失，因为这是分类问题
+            type_loss += F.binary_cross_entropy_with_logits(
+                pred_matched[:, TrajParamIndex.CAR:TrajParamIndex.UNKNOWN+1],
+                gt_matched[:, TrajParamIndex.CAR:TrajParamIndex.UNKNOWN+1]
+            )
+            
+            # 计算未匹配的预测（假阳性）
+            all_pred_idx = set(range(pred_trajs.shape[1]))
+            unmatched_pred_idx = list(all_pred_idx - set(pred_idx))
+            
+            if unmatched_pred_idx:
+                # 获取未匹配的预测
+                pred_unmatched = pred_trajs[b, unmatched_pred_idx]
                 
-                # Velocity loss
-                vel_loss = F.l1_loss(
-                    pred_matched[:, [TrajParamIndex.VX, TrajParamIndex.VY]],
-                    target_matched[:, [TrajParamIndex.VX, TrajParamIndex.VY]]
+                # 计算假阳性存在损失 - 所有未匹配的预测应该有 HAS_OBJECT=0
+                fp_loss_exist += F.binary_cross_entropy_with_logits(
+                    pred_unmatched[:, TrajParamIndex.HAS_OBJECT:TrajParamIndex.HAS_OBJECT+1],
+                    torch.zeros_like(pred_unmatched[:, TrajParamIndex.HAS_OBJECT:TrajParamIndex.HAS_OBJECT+1])
                 )
-                losses[f'{prefix}loss_vel'] = vel_loss
                 
-                # Acceleration loss
-                acc_loss = F.l1_loss(
-                    pred_matched[:, [TrajParamIndex.AX, TrajParamIndex.AY]],
-                    target_matched[:, [TrajParamIndex.AX, TrajParamIndex.AY]]
-                )
-                losses[f'{prefix}loss_acc'] = acc_loss
+                # 只对那些预测为有物体的未匹配预测计算额外的假阳性损失
+                # 这样可以更强烈地惩罚那些错误地高置信度预测
+                fp_high_conf = pred_unmatched[:, TrajParamIndex.HAS_OBJECT] > 0.5
+                if fp_high_conf.any():
+                    high_conf_fp = pred_unmatched[fp_high_conf]
+                    
+                    # 对于高置信度的假阳性，我们希望它们的类型预测也是低置信度的
+                    # 使用均匀分布作为目标（所有类型概率相等）
+                    num_classes = TrajParamIndex.UNKNOWN - TrajParamIndex.CAR + 1
+                    uniform_target = torch.ones_like(high_conf_fp[:, TrajParamIndex.CAR:TrajParamIndex.UNKNOWN+1]) / num_classes
+                    
+                    # 添加类型损失
+                    fp_loss_exist += 0.2 * F.binary_cross_entropy_with_logits(
+                        high_conf_fp[:, TrajParamIndex.CAR:TrajParamIndex.UNKNOWN+1],
+                        uniform_target
+                    )
                 
-                # Dimension loss
-                dim_loss = F.l1_loss(
-                    pred_matched[:, [TrajParamIndex.LENGTH, TrajParamIndex.WIDTH, TrajParamIndex.HEIGHT]],
-                    target_matched[:, [TrajParamIndex.LENGTH, TrajParamIndex.WIDTH, TrajParamIndex.HEIGHT]]
-                )
-                losses[f'{prefix}loss_dim'] = dim_loss
-                
-                # Yaw loss
-                yaw_loss = F.l1_loss(
-                    pred_matched[:, TrajParamIndex.YAW],
-                    target_matched[:, TrajParamIndex.YAW]
-                )
-                losses[f'{prefix}loss_yaw'] = yaw_loss
-                
-                # Type loss
-                type_loss = F.binary_cross_entropy_with_logits(
-                    pred_matched[:, TrajParamIndex.CAR:TrajParamIndex.UNKNOWN+1],
-                    target_matched[:, TrajParamIndex.CAR:TrajParamIndex.UNKNOWN+1]
-                )
-                losses[f'{prefix}loss_type'] = type_loss
-                
-                # Attribute loss
-                attr_loss = F.binary_cross_entropy_with_logits(
-                    pred_matched[:, TrajParamIndex.HAS_OBJECT:TrajParamIndex.OCCLUDED+1],
-                    target_matched[:, TrajParamIndex.HAS_OBJECT:TrajParamIndex.OCCLUDED+1]
-                )
-                losses[f'{prefix}loss_attr'] = attr_loss
+                total_fp += len(unmatched_pred_idx)
+            
+            total_objects += len(gt_idx)
         
-        # Average losses across batch
-        return {k: v.mean() for k, v in losses.items()}
+        # 归一化损失
+        if total_objects > 0:
+            pos_loss /= total_objects
+            dim_loss /= total_objects
+            vel_loss /= total_objects
+            yaw_loss /= total_objects
+            type_loss /= total_objects
+            loss_acc /= total_objects
+            loss_attr /= total_objects
+        
+        # 归一化假阳性损失
+        if total_fp > 0:
+            fp_loss_exist /= total_fp
+        else:
+            # 如果没有假阳性，我们仍然需要确保梯度流动
+            # 创建一个小的常数损失，这样即使没有假阳性，模型也能学习
+            fp_loss_exist = torch.tensor(0.01, device=pred_trajs.device)
+        
+        # 获取层索引并应用层权重
+        layer_idx = int(prefix.split('_')[1]) - 4  # 从layer_4开始，所以减4
+        layer_weight = self.config.layer_loss_weights[layer_idx] if layer_idx < len(self.config.layer_loss_weights) else 1.0
+        
+        # 添加到损失字典，应用权重和层权重
+        losses[prefix + 'loss_pos'] = pos_loss * self.weight_dict['loss_pos'] * layer_weight
+        losses[prefix + 'loss_dim'] = dim_loss * self.weight_dict['loss_dim'] * layer_weight
+        losses[prefix + 'loss_vel'] = vel_loss * self.weight_dict['loss_vel'] * layer_weight
+        losses[prefix + 'loss_yaw'] = yaw_loss * self.weight_dict['loss_yaw'] * layer_weight
+        losses[prefix + 'loss_type'] = type_loss * self.weight_dict['loss_type'] * layer_weight
+        losses[prefix + 'loss_acc'] = loss_acc * self.weight_dict['loss_acc'] * layer_weight
+        losses[prefix + 'loss_attr'] = loss_attr * self.weight_dict['loss_attr'] * layer_weight
+        losses[prefix + 'fp_loss_exist'] = fp_loss_exist * self.weight_dict['fp_loss_exist'] * layer_weight
+        
+        return losses
+
+    def _compute_matching_cost(self, pred_trajs: torch.Tensor, gt_trajs: torch.Tensor) -> torch.Tensor:
+        """计算匹配代价矩阵。
+        
+        Args:
+            pred_trajs: 预测轨迹 [N, TrajParamIndex.END_OF_INDEX]
+            gt_trajs: 真实轨迹 [M, TrajParamIndex.END_OF_INDEX]
+            
+        Returns:
+            代价矩阵 [N, M]
+        """
+        device = pred_trajs.device
+        N, M = len(pred_trajs), len(gt_trajs)
+        
+        if M == 0:
+            return torch.zeros((N, 0), device=device)
+        
+        # 只考虑有效的真实轨迹（HAS_OBJECT=1）
+        valid_gt_mask = gt_trajs[:, TrajParamIndex.HAS_OBJECT] > 0.5
+        valid_gt_trajs = gt_trajs[valid_gt_mask]
+        
+        if len(valid_gt_trajs) == 0:
+            return torch.zeros((N, 0), device=device)
+        
+        # 计算代价矩阵
+        cost_matrix = torch.zeros((N, len(valid_gt_trajs)), device=device)
+        
+        for i in range(N):
+            for j in range(len(valid_gt_trajs)):
+                # 位置代价 - 使用L1损失
+                pos_cost = F.l1_loss(
+                    pred_trajs[i, TrajParamIndex.X:TrajParamIndex.Z+1],
+                    valid_gt_trajs[j, TrajParamIndex.X:TrajParamIndex.Z+1],
+                    reduction='sum'
+                )
+                
+                # 尺寸代价 - 使用L1损失
+                dim_cost = F.l1_loss(
+                    pred_trajs[i, TrajParamIndex.LENGTH:TrajParamIndex.HEIGHT+1],
+                    valid_gt_trajs[j, TrajParamIndex.LENGTH:TrajParamIndex.HEIGHT+1],
+                    reduction='sum'
+                )
+                
+                # 类型代价（使用交叉熵）
+                type_cost = F.binary_cross_entropy_with_logits(
+                    pred_trajs[i, TrajParamIndex.CAR:TrajParamIndex.UNKNOWN+1],
+                    valid_gt_trajs[j, TrajParamIndex.CAR:TrajParamIndex.UNKNOWN+1],
+                    reduction='sum'
+                )
+                
+                # 综合代价
+                cost = (
+                    pos_cost * self.weight_dict['loss_pos'] +
+                    dim_cost * self.weight_dict['loss_dim'] +
+                    type_cost * self.weight_dict['loss_type']
+                )
+                
+                cost_matrix[i, j] = cost
+        
+        return cost_matrix
 
 def calculate_trajectory_bev_iou(traj1: torch.Tensor, traj2: torch.Tensor, frames: torch.Tensor) -> torch.Tensor:
     """Calculate bird's eye view IoU between trajectories.

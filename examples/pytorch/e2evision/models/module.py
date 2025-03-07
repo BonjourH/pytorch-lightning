@@ -20,7 +20,7 @@ class E2EPerceptionModule(L.LightningModule):
         self.net = E2EPerceptionNet(config.model, config.data)
         
         # Create loss function
-        self.criterion = TrajectoryLoss()
+        self.criterion = TrajectoryLoss(config.loss)
         
         # Initialize validation metrics
         self.val_step_outputs = []

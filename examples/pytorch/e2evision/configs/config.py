@@ -46,7 +46,7 @@ class CameraGroupConfig(ConfigBase):
         return cls(name='long_focal_length_camera', 
                    camera_group=[SourceCameraId.FRONT_LEFT_CAMERA, SourceCameraId.FRONT_RIGHT_CAMERA,
                                  SourceCameraId.REAR_LEFT_CAMERA, SourceCameraId.REAR_RIGHT_CAMERA],
-                   image_size=(800, 416),
+                   image_size=(576, 288),
                    backbone='resnet18',
                    downsample_scale=8)
     
@@ -54,8 +54,8 @@ class CameraGroupConfig(ConfigBase):
     def front_stereo_camera_group(cls):
         return cls(name='front_stereo_camera', 
                    camera_group=[SourceCameraId.FRONT_LEFT_CAMERA, SourceCameraId.FRONT_RIGHT_CAMERA],
-                   image_size=(800, 416),
-                   backbone='resnet18',
+                   image_size=(576, 288),
+                   backbone='repvgg_a1',
                    downsample_scale=4)
     
     @classmethod
@@ -70,7 +70,7 @@ class CameraGroupConfig(ConfigBase):
     def rear_camera_group(cls):
         return cls(name='rear_camera', 
                    camera_group=[SourceCameraId.REAR_LEFT_CAMERA, SourceCameraId.REAR_RIGHT_CAMERA],
-                   image_size=(800, 416),
+                   image_size=(576, 288),
                    backbone='repvgg_a1',
                    downsample_scale=8)
 
@@ -174,6 +174,28 @@ class LoggingConfig(ConfigBase):
         'train/layer_6_loss_exist_epoch',
         'val/loss'
     ])
+    
+@dataclass
+class LossConfig(ConfigBase):
+    """Loss configuration"""
+    weight_dict: Dict[str, float] = field(default_factory=lambda: {
+        'loss_pos': 1.0,
+        'loss_dim': 1.0,
+        'loss_vel': 1.0,
+        'loss_yaw': 1.0,
+        'loss_type': 1.0,
+        'loss_acc': 1.0,
+        'loss_attr': 1.0,
+        'fp_loss_exist': 1.0
+    })
+    layer_loss_weights: List[float] = field(default_factory=lambda: [
+        1.0, 1.0, 1.0, 1.0, 1.0, 1.0
+    ])
+    aux_loss_weight: float = 0.5
+    frames: int = 10
+    dt: float = 0.1
+    iou_method: str = "iou2"
+    iou_threshold: float = 0.5
 
 
 @dataclass
@@ -184,6 +206,7 @@ class Config(ConfigBase):
     training: TrainingConfig = field(default_factory=TrainingConfig)
     inference: InferenceConfig = field(default_factory=InferenceConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
+    loss: LossConfig = field(default_factory=LossConfig)
     
     @classmethod
     def from_dict(cls, data: Dict) -> 'Config':
@@ -193,7 +216,8 @@ class Config(ConfigBase):
             model=ModelConfig(**data.get('model', {})),
             training=TrainingConfig(**data.get('training', {})),
             inference=InferenceConfig(**data.get('inference', {})),
-            logging=LoggingConfig(**data.get('logging', {}))
+            logging=LoggingConfig(**data.get('logging', {})),
+            loss=LossConfig(**data.get('loss', {}))
         )
 
     def save(self, path: Union[str, Path], format: str = 'json'):
