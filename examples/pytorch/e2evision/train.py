@@ -29,8 +29,12 @@ def parse_args():
     
     # Configuration file parameters
     parser.add_argument('--config_file', type=str, default=None, help='config file path, could be a python file, yaml file or json file')
+    
+    # Important control parameters
+    parser.add_argument('--experiment_name', type=str, help='Name of the experiment')
+    parser.add_argument('--validate_only', action='store_true', help='Only run validation, no training')
+    
     # General way to override any configuration item in the configuration file
-    parser.add_argument('--experiment_name', type=str, default=None, help='Name of the experiment')
     parser.add_argument('--config-override', nargs='+', action='append', 
                         help='Override config values. Format: section.key=value')
     
@@ -111,11 +115,19 @@ def main():
         gradient_clip_val=config.training.gradient_clip_val,
         accumulate_grad_batches=config.training.accumulate_grad_batches,
         deterministic=True,
+        enable_progress_bar=True,
+        limit_val_batches=config.training.limit_val_batches,
     )
     
-    # Train model
+    # Get checkpoint path
     checkpoint_path = os.path.join(config.logging.checkpoint_dir, 'last.ckpt')
-    trainer.fit(model, datamodule=datamodule, ckpt_path=checkpoint_path)
+    # Run validation only or train model
+    if args.validate_only and os.path.exists(checkpoint_path):
+        print("Running validation only...")
+        trainer.validate(model, datamodule=datamodule, ckpt_path=checkpoint_path)
+    else:
+        print("Starting training...")
+        trainer.fit(model, datamodule=datamodule, ckpt_path=checkpoint_path)
 
 if __name__ == '__main__':
     main()

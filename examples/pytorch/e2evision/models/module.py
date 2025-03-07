@@ -82,23 +82,40 @@ class E2EPerceptionModule(L.LightningModule):
     def on_validation_epoch_end(self):
         """Compute validation metrics at epoch end."""
         if not self.val_step_outputs:
+            print("No validation outputs to process")
             return
+        
+        print(f"Processing {len(self.val_step_outputs)} validation outputs")
         
         # Aggregate predictions and targets
         all_preds = []
         all_targets = []
         
-        for output in self.val_step_outputs:
-            pred_trajs = output['outputs']['traj_params']
-            pred_types = output['outputs']['type_logits'].argmax(dim=-1)
+        for i, output in enumerate(self.val_step_outputs):
+            print(f"Processing validation output {i+1}/{len(self.val_step_outputs)}")
+            
+            # 这是一个张量，不是字典
+            pred_trajs = output['outputs']
             gt_trajs = output['targets']['trajs']
             
+            print(f"  Predictions shape: {pred_trajs.shape}")
+            print(f"  Targets shape: {gt_trajs.shape}")
+            
             # Filter valid predictions and targets
-            valid_preds = pred_trajs[pred_trajs[..., 11] > 0.5]  # HAS_OBJECT flag
-            valid_targets = gt_trajs[gt_trajs[..., 11] > 0.5]
+            valid_mask_preds = pred_trajs[..., 11] > 0.5  # HAS_OBJECT flag
+            valid_mask_targets = gt_trajs[..., 11] > 0.5
+            
+            print(f"  Valid predictions: {valid_mask_preds.sum().item()}")
+            print(f"  Valid targets: {valid_mask_targets.sum().item()}")
+            
+            valid_preds = pred_trajs[valid_mask_preds]
+            valid_targets = gt_trajs[valid_mask_targets]
             
             all_preds.extend(valid_preds)
             all_targets.extend(valid_targets)
+        
+        print(f"Total valid predictions: {len(all_preds)}")
+        print(f"Total valid targets: {len(all_targets)}")
         
         # Compute metrics
         metrics = self._compute_metrics(all_preds, all_targets)

@@ -19,6 +19,8 @@ RESUME=${RESUME:-1}
 PRETRAINED_WEIGHTS=${PRETRAINED_WEIGHTS:-"true"}
 RUN_ID=${RUN_ID:-0}
 CONFIG_FILE=${CONFIG_FILE:-"configs/e2e_perception.yaml"}
+VALIDATE_ONLY=${VALIDATE_ONLY:-0}  # 0: train and validate, 1: validate only
+LIMIT_VAL_BATCHES=${LIMIT_VAL_BATCHES:-1.0}  # 1.0: validate all batches, 0.1: validate 10% of batches
 # Create log directory
 LOG_DIR="logs"
 CHECKPOINT_DIR="checkpoints"
@@ -71,12 +73,19 @@ LOG_FILE="${LOG_DIR}/${EXP_NAME}.log"
     TRAIN_CMD="python train.py"
     TRAIN_CMD="${TRAIN_CMD} --config_file ${CONFIG_FILE}"
     TRAIN_CMD="${TRAIN_CMD} --experiment_name ${EXP_NAME}"
+    
+    # Add validate-only flag if needed
+    if [ "${VALIDATE_ONLY}" = "1" ]; then
+        TRAIN_CMD="${TRAIN_CMD} --validate_only"
+        echo "Running in validation-only mode"
+    fi
 
     # Create config override array
     CONFIG_OVERRIDES=()
     
     # Add each parameter to the override array
     CONFIG_OVERRIDES+=("resume=${RESUME}")
+    CONFIG_OVERRIDES+=("validate_only=${VALIDATE_ONLY}")
     CONFIG_OVERRIDES+=("training.train_list=${TRAIN_LIST}")
     CONFIG_OVERRIDES+=("training.val_list=${VAL_LIST}")
     CONFIG_OVERRIDES+=("training.batch_size=${BATCH_SIZE}")
@@ -88,6 +97,7 @@ LOG_FILE="${LOG_DIR}/${EXP_NAME}.log"
     CONFIG_OVERRIDES+=("training.accumulate_grad_batches=${ACCUMULATE_GRAD_BATCHES}")
     CONFIG_OVERRIDES+=("training.seed=${SEED}")
     CONFIG_OVERRIDES+=("training.pretrained_weights=${PRETRAINED_WEIGHTS}")
+    CONFIG_OVERRIDES+=("training.limit_val_batches=${LIMIT_VAL_BATCHES}")
     CONFIG_OVERRIDES+=("model.backbone=${BACKBONE}")
     CONFIG_OVERRIDES+=("model.num_queries=${NUM_QUERIES}")
     CONFIG_OVERRIDES+=("logging.checkpoint_dir=${CHECKPOINT_DIR}")

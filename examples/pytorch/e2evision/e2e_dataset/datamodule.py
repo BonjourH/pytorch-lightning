@@ -61,6 +61,18 @@ class E2EPerceptionDataModule(L.LightningDataModule):
                 camera_ids=self.camera_ids,
                 sequence_length=self.hparams.sequence_length
             )
+        
+        elif stage == "validate":
+            # Only setup validation dataset for validation stage
+            if self.val_dataset is None:
+                val_clips = self.read_clip_list(self.hparams.val_list)
+                print(f"Found {len(val_clips)} validation clips")
+                
+                self.val_dataset = MultiFrameDataset(
+                    clip_dirs=val_clips,
+                    camera_ids=self.camera_ids,
+                    sequence_length=self.hparams.sequence_length
+                )
     
     def train_dataloader(self):
         return DataLoader(
