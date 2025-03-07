@@ -4,6 +4,15 @@ from typing import Literal, Optional
 
 class BaseTemporalFusion(nn.Module):
     """Base class for temporal feature fusion strategies."""
+    def __init__(self):
+        super().__init__()
+        
+    def _init_weights(self):
+        """Initialize network weights."""
+        for p in self.parameters():
+            if p.dim() > 1:
+                nn.init.kaiming_normal_(p, nonlinearity='relu')
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Forward pass for temporal fusion.
@@ -41,6 +50,7 @@ class SelfAttentionFusion(BaseTemporalFusion):
             batch_first=True
         )
         self.norm = nn.LayerNorm(feature_dim)
+        self._init_weights()
         
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -78,6 +88,7 @@ class CrossAttentionFusion(BaseTemporalFusion):
             batch_first=True
         )
         self.norm = nn.LayerNorm(feature_dim)
+        self._init_weights()
         
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -112,7 +123,7 @@ class GatedTemporalFusion(BaseTemporalFusion):
             nn.Sigmoid()
         )
         self.fusion_conv = nn.Conv3d(feature_dim, feature_dim, kernel_size=3, padding=1)
-        
+        self._init_weights()
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Apply gated fusion across temporal dimension.
@@ -142,6 +153,7 @@ class RNNTemporalFusion(BaseTemporalFusion):
             batch_first=True
         )
         self.fc = nn.Linear(hidden_dim, feature_dim * feature_dim)
+        self._init_weights()
         
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """

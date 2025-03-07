@@ -13,7 +13,7 @@ class ImageFeatureExtractor(nn.Module):
     def __init__(
         self,
         out_channels: int = 256,
-        use_pretrained: bool = False,
+        use_pretrained: bool = True,
         backbone: str = 'resnet18',
     ):
         super().__init__()
@@ -26,58 +26,15 @@ class ImageFeatureExtractor(nn.Module):
             'mobilenet_v2': {'model': models.mobilenet_v2, 'weights': models.MobileNet_V2_Weights.DEFAULT, 'out_features': 1280},
             'mobilenet_v3_small': {'model': models.mobilenet_v3_small, 'weights': models.MobileNet_V3_Small_Weights.DEFAULT, 'out_features': 576},
             # ==================== timm 模型 ====================
-            'efficientnet_b0': {'model': 
-                'efficientnet_b0', 
-                'out_features': 1280,
-                'features_only': True,
-                'pretrained_cfg': 'efficientnet_b0.a1_in1k'
-            },
-            'efficientnet_b1': {'model': 'efficientnet_b1', 
-                'out_features': 1280,
-                'features_only': True,
-                'pretrained_cfg': 'efficientnet_b1.a1_in1k'
-            },
-            'repvgg_a0': {'model': 'repvgg_a0', 
-                'out_features': 1280,
-                'features_only': True,
-                'pretrained_cfg': 'repvgg_a0.a1_in1k'
-            },
-            'repvgg_a1': {
-                'model': 'repvgg_a1', 
-                'out_features': 1280,
-                'features_only': True,
-                'pretrained_cfg': 'repvgg_a1.a1_in1k'
-            },
-            'convnext_tiny': {
-                'model': 'convnext_tiny', 
-                'out_features': 768,
-                'features_only': True,
-                'pretrained_cfg': 'convnext_tiny.a1_in1k'
-            },
-            'mobilevitv2_050': {  # MobileViT V2 (0.5x)
-                'model': 'mobilevitv2_050',
-                'out_features': 256,
-                'features_only': True,
-                'pretrained_cfg': 'mobilevitv2_050.a1_in1k'
-            },
-            'efficientformerv2_s0': {  # EfficientFormerV2 Small
-                'model': 'efficientformerv2_s0',
-                'out_features': 256,
-                'features_only': True,
-                'pretrained_cfg': 'efficientformerv2_s0.a1_in1k'
-            },
-            'mobileone_s0': {  # MobileOne-S0
-                'model': 'mobileone_s0',
-                'out_features': 1024,
-                'features_only': True,
-                'pretrained_cfg': 'mobileone_s0.a1_in1k'
-            },
-            'ghostnet_100': {  # GhostNet 1.0x
-                'model': 'ghostnet_100',
-                'out_features': 1280,
-                'features_only': True,
-                'pretrained_cfg': 'ghostnet_100.a1_in1k'
-            },
+            'efficientnet_b0': {'model': 'efficientnet_b0', 'out_features': 1280},
+            'efficientnet_b1': {'model': 'efficientnet_b1', 'out_features': 1280},
+            'repvgg_a0': {'model': 'repvgg_a0', 'out_features': 1280},
+            'repvgg_a1': {'model': 'repvgg_a1', 'out_features': 1280},
+            'convnext_tiny': {'model': 'convnext_tiny', 'out_features': 768},
+            'mobilevitv2_050': {'model': 'mobilevitv2_050', 'out_features': 256},
+            'efficientformerv2_s0': {'model': 'efficientformerv2_s0', 'out_features': 256},
+            'mobileone_s0': {'model': 'mobileone_s0', 'out_features': 1024},
+            'ghostnet_100': {'model': 'ghostnet_100', 'out_features': 160},
         }
         
         # 检查 backbone 是否支持
@@ -96,9 +53,7 @@ class ImageFeatureExtractor(nn.Module):
             self.backbone = create_model(
                 model_info['model'],
                 pretrained=use_pretrained,
-                features_only=True,
-                out_indices=[-1],  # 默认取最后一层特征
-                **({'pretrained_cfg': model_info['pretrained_cfg']} if use_pretrained else {})
+                features_only=True
             )
         
         # 获取输出通道数
@@ -110,6 +65,15 @@ class ImageFeatureExtractor(nn.Module):
             nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True)
         )
+        
+        if not use_pretrained:
+            self._init_weights()
+    
+    def _init_weights(self):
+        """Initialize network weights."""
+        for p in self.parameters():
+            if p.dim() > 1:
+                nn.init.kaiming_normal_(p, nonlinearity='relu')
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.backbone(x)
@@ -222,7 +186,7 @@ class TrajectoryDecoder(nn.Module):
         # Initialize parameters
         for p in self.parameters():
             if p.dim() > 1:
-                nn.init.xavier_uniform_(p)
+                nn.init.kaiming_normal_(p, nonlinearity='relu')
     
     def forward(self, 
                 features_dict: Dict[SourceCameraId, torch.Tensor],

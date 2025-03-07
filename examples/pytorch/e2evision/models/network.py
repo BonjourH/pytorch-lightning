@@ -4,7 +4,7 @@ from typing import Dict, List, Optional
 import numpy as np
 
 from base import SourceCameraId, TrajParamIndex, ObjectType, CameraParamIndex, EgoStateIndex
-from .components import ImageFeatureExtractor, TrajectoryQueryRefineLayer, TrajectoryDecoder
+from .components import ImageFeatureExtractor, TrajectoryDecoder
 from .temporal_fusion_layer import TemporalFusionFactory
 
     
@@ -36,15 +36,6 @@ class E2EPerceptionNet(nn.Module):
             num_queries=num_queries,
             feature_dim=feature_dim
         )
-        
-        # Initialize parameters
-        self._init_weights()
-    
-    def _init_weights(self):
-        """Initialize network weights."""
-        for p in self.parameters():
-            if p.dim() > 1:
-                nn.init.xavier_uniform_(p)
     
     def forward(self, batch: Dict) -> List[Dict[str, torch.Tensor]]:
         """Forward pass.
