@@ -122,6 +122,9 @@ class TrajParamIndex(IntEnum):
     
     def __str__(self):
         return self.name
+    
+    def __int__(self):
+        return self.value
 
 
 @dataclass
@@ -251,6 +254,11 @@ class ObstacleTrajectory:
         corners = corner_offsets @ rot.T + center
         return corners
     
+def tensor_to_object_type(tensor: torch.Tensor) -> ObjectType:
+    """Convert tensor to ObjectType."""
+    index = int(torch.argmax(tensor[TrajParamIndex.CAR:])) + TrajParamIndex.CAR
+    return ObjectType[TrajParamIndex(index).name]
+    
 def tensor_to_trajectory(traj_params: torch.Tensor, traj_id: int = 0, t0: float = 0.0) -> ObstacleTrajectory:
     """Convert trajectory parameters tensor to ObstacleTrajectory object.
     
@@ -275,9 +283,6 @@ def tensor_to_trajectory(traj_params: torch.Tensor, traj_id: int = 0, t0: float 
         az=0.0   # Z acceleration not predicted
     )
     
-    # get object type, by taking the max value index
-    index = int(torch.argmax(traj_params[TrajParamIndex.CAR:]))
-    
     # Create ObstacleTrajectory object
     return ObstacleTrajectory(
         id=traj_id,
@@ -286,7 +291,7 @@ def tensor_to_trajectory(traj_params: torch.Tensor, traj_id: int = 0, t0: float 
         length=float(traj_params[TrajParamIndex.LENGTH]),
         width=float(traj_params[TrajParamIndex.WIDTH]),
         height=float(traj_params[TrajParamIndex.HEIGHT]),
-        object_type=ObjectType[TrajParamIndex(index).name],
+        object_type=tensor_to_object_type(traj_params),
         t0=t0,
         static=bool(traj_params[TrajParamIndex.STATIC] > 0.5),
         valid=bool(traj_params[TrajParamIndex.HAS_OBJECT] > 0.5)

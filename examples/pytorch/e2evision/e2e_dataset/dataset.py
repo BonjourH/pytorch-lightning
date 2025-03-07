@@ -10,8 +10,9 @@ from enum import IntEnum
 from base import (
     SourceCameraId, CameraType, ObjectType,
     TrajParamIndex, CameraParamIndex,
-    EgoStateIndex
+    EgoStateIndex, tensor_to_object_type
 )
+from configs.config import DataConfig
 import numpy as np
 
 
@@ -35,21 +36,10 @@ class TrainingSample:
 
 class MultiFrameDataset(Dataset):
     """Dataset for multi-frame multi-camera perception."""
-    def __init__(self, 
-                 clip_dirs: List[str],
-                 camera_ids: List[SourceCameraId],
-                 sequence_length: int = 10,
-                 transform=None):
+    def __init__(self, clip_dirs: List[str], config: DataConfig = None):
+        assert config is not None, "config must be provided"
+        self.config = config
         self.clip_dirs = clip_dirs
-        self.camera_ids = camera_ids
-        self.sequence_length = sequence_length
-        self.transform = transform or transforms.Compose([
-            transforms.Resize((416, 800)),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], 
-                              std=[0.229, 0.224, 0.225])
-        ])
-        
         self.samples = self._build_samples()
         print(f"Total {len(self.samples)} samples")
 
@@ -60,7 +50,7 @@ class MultiFrameDataset(Dataset):
         for clip_dir in self.clip_dirs:
             # 1. Load calibrations
             calibrations: Dict[SourceCameraId, torch.Tensor] = {}
-            for camera_id in self.camera_ids:
+            for camera_id in self.config.camera_ids:
                 calib_file = os.path.join(clip_dir, 'calib_json', f'{camera_id.name.lower()}.json')
                 with open(calib_file, 'r') as f:
                     calib_data = json.load(f)
@@ -129,22 +119,18 @@ class MultiFrameDataset(Dataset):
                 f"ego_states and labels should have same length but got {len(ego_states)} and {len(obstacle_labels)}"
             
             # Create samples with sliding window
-            valid_sample_num = max(0, len(ego_states) - self.sequence_length + 1)
+            valid_sample_num = max(0, len(ego_states) - self.config.sequence_length + 1)
             for start_idx in range(valid_sample_num):
                 sample = TrainingSample(calibrations)
                 
                 # Add frames to sample
-                for i in range(start_idx, start_idx + self.sequence_length):
+                for i in range(start_idx, start_idx + self.config.sequence_length):
                     timestamp = "{:.6f}".format(ego_states[i]['timestamp'])
                     
                     # Collect image paths
                     img_paths = {}
-                    for camera_id in self.camera_ids:
-                        img_path = os.path.join(
-                            clip_dir, 
-                            camera_id.name.lower(),
-                            f'{timestamp}.png'
-                        )
+                    for camera_id in self.config.camera_ids:
+                        img_path = os.path.join(clip_dir, camera_id.name.lower(), f'{timestamp}.png')
                         assert os.path.exists(img_path), f"Image not found: {img_path}"
                         img_paths[camera_id] = img_path
                     
@@ -163,7 +149,7 @@ class MultiFrameDataset(Dataset):
                     sample.add_frame(img_paths, ego_state)
                     
                     # Add trajectory if it's the last frame
-                    if i == start_idx + self.sequence_length - 1:
+                    if i == start_idx + self.config.sequence_length - 1:
                         trajs = []
                         for obj_data in obstacle_labels[i]['obstacles']:
                             traj = torch.zeros(TrajParamIndex.END_OF_INDEX)
@@ -200,27 +186,34 @@ class MultiFrameDataset(Dataset):
         return len(self.samples)
 
     def __getitem__(self, idx: int) -> Dict[str, Union[Dict, List, torch.Tensor]]:
+        # load images from image_paths and do preprocessing
         sample = self.samples[idx]
         T = len(sample.ego_states)
         
-        
         ret = {
-            'images': {},  # Dict[camera_id -> Tensor[T, C, H, W]]
+            'images': {},  # Dict[str -> Tensor[T, N_cams, C, H, W]]
             'calibrations': sample.calibrations,  # Dict[camera_id -> Tensor[CameraParamIndex.END_OF_INDEX]]
             'ego_states': torch.stack(sample.ego_states),  # Tensor[T, EgoStateIndex.END_OF_INDEX]
             'trajs': sample.trajs  # Tensor[-1, TrajParamIndex.END_OF_INDEX]
         }
         
-        # Load images for each camera
-        for camera_id in self.camera_ids:
-            images = []
-            for frame_paths in sample.image_paths:
-                img = Image.open(frame_paths[camera_id])
-                if self.transform:
-                    img = self.transform(img)
-                images.append(img)
-            ret['images'][camera_id] = torch.stack(images)
-            
+        # Load images for each camera group
+        for camera_group in self.config.camera_groups:
+            transform = transforms.Compose([    
+                transforms.Resize(camera_group.image_size),
+                transforms.ToTensor(),
+                transforms.Normalize(camera_group.normalize_mean, camera_group.normalize_std)
+            ])
+            imgs = []
+            for img_paths in sample.image_paths:
+                frame_imgs = []
+                for camera_id in camera_group.camera_group:
+                    img = Image.open(img_paths[camera_id])
+                    img = transform(img)
+                    frame_imgs.append(img)
+                one_frame_img = torch.stack(frame_imgs) # [N_cams, C, H, W]
+                imgs.append(one_frame_img)
+            ret['images'][camera_group.name] = torch.stack(imgs) # [T, N_cams, C, H, W]
         return ret
 
     
@@ -230,7 +223,7 @@ def custom_collate_fn(batch: List[Dict]) -> Dict:
     T = len(batch[0]['ego_states'])
     
     collated = {
-        'images': {},      # Dict[camera_id -> Tensor[B, T, C, H, W]]
+        'images': {},      # Dict[str -> Tensor[B, T, N_cams, C, H, W]]
         'calibrations': {},  # Dict[camera_id -> Tensor[B, CameraParamIndex.END_OF_INDEX]]
         'valid_traj_nb': torch.zeros(B),  # Tensor[B]
         'trajs': torch.zeros(B, MAX_TRAJ_NB, TrajParamIndex.END_OF_INDEX),  # Tensor[B, MAX_TRAJ_NB, TrajParamIndex.END_OF_INDEX]   
@@ -238,8 +231,8 @@ def custom_collate_fn(batch: List[Dict]) -> Dict:
     }
     
     # Collate images
-    for camera_id in batch[0]['images'].keys():
-        collated['images'][camera_id] = torch.stack([b['images'][camera_id] for b in batch])
+    for camera_group_name in batch[0]['images'].keys():
+        collated['images'][camera_group_name] = torch.stack([b['images'][camera_group_name] for b in batch])
     
     # Collate calibrations
     for camera_id in batch[0]['calibrations'].keys():
@@ -256,10 +249,7 @@ def custom_collate_fn(batch: List[Dict]) -> Dict:
 if __name__ == '__main__':
     # Test configuration
     clip_dirs = [
-        '/home/xinjian/Code/VAutoLabelerCore/labeling_info/1_20231219T122348_pdb-l4e-c0011_0_0to8',
-        '/home/xinjian/Code/VAutoLabelerCore/labeling_info/3_20240117T084829_pdb-l4e-b0005_10_792to812',
-        '/home/xinjian/Code/VAutoLabelerCore/labeling_info/4_20240223T161731_pdb-l4e-b0001_4_197to207',
-        '/home/xinjian/Code/VAutoLabelerCore/labeling_info/5_20240223T161731_pdb-l4e-b0001_4_159to169'
+        '/home/xinjian/Code/VAutoLabelerCore/labeling_info/1_20231219T122348_pdb-l4e-c0011_0_0to8'
     ]
 
     camera_ids = [
@@ -275,14 +265,13 @@ if __name__ == '__main__':
     print("\n=== Testing Dataset Initialization ===")
     dataset = MultiFrameDataset(
         clip_dirs=clip_dirs,
-        camera_ids=camera_ids,
-        sequence_length=10
+        config=DataConfig()
     )
 
     print("\n=== Testing Data Loading ===")
     dataloader = DataLoader(
         dataset,
-        batch_size=2,
+        batch_size=5,
         shuffle=True,
         num_workers=2,
         collate_fn=custom_collate_fn
@@ -296,8 +285,8 @@ if __name__ == '__main__':
         print(batch.keys())
         
         print("\nImage shapes:")
-        for camera_id, images in batch['images'].items():
-            print(f"Camera {camera_id.name}: {images.shape}")
+        for camera_group_name, images in batch['images'].items():
+            print(f"Camera group {camera_group_name}: {images.shape} (batch_size, T, N_cams, C, H, W)")
         
         print("\nEgo state info:")
         print(f"Shape of ego states tensor: {batch['ego_states'].shape}")
@@ -320,7 +309,7 @@ if __name__ == '__main__':
             print(f"  Velocity: ({first_traj[TrajParamIndex.VX]:.2f}, {first_traj[TrajParamIndex.VY]:.2f})")
             print(f"  Dimensions: {first_traj[TrajParamIndex.LENGTH]:.2f} x {first_traj[TrajParamIndex.WIDTH]:.2f} x {first_traj[TrajParamIndex.HEIGHT]:.2f}")
             print(f"  Yaw: {first_traj[TrajParamIndex.YAW]:.2f}")
-            print(f"  Object type: {ObjectType(int(first_traj[TrajParamIndex.OBJECT_TYPE].item()))}")
+            print(f"  Object type: {tensor_to_object_type(first_traj)}")
         
         print("\nCalibration info:")
         for camera_id, calib in batch['calibrations'].items():

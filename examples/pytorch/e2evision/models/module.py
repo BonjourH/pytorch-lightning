@@ -8,39 +8,23 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from base import SourceCameraId
 from models.network import E2EPerceptionNet
 from models.loss import TrajectoryLoss
-
+from configs.config import Config
 class E2EPerceptionModule(L.LightningModule):
     """Lightning module for end-to-end perception."""
     
-    def __init__(self,
-                 camera_ids: List[SourceCameraId],
-                 feature_dim: int = 256,
-                 num_queries: int = 100,
-                 num_decoder_layers: int = 6,
-                 learning_rate: float = 1e-4,
-                 weight_decay: float = 1e-4,
-                 max_epochs: int = 100,
-                 use_pretrained: bool = False,
-                 backbone: str = 'resnet50'):
+    def __init__(self, config: Config):
         super().__init__()
-        self.save_hyperparameters(ignore=['camera_ids'])
-        
+        # self.save_hyperparameters()
+        self.config = config
         # Create network
-        self.net = E2EPerceptionNet(
-            camera_ids=camera_ids,
-            feature_dim=feature_dim,
-            num_queries=num_queries,
-            num_decoder_layers=num_decoder_layers,
-            use_pretrained=use_pretrained,
-            backbone=backbone
-        )
+        self.net = E2EPerceptionNet(config.model, config.data)
         
         # Create loss function
         self.criterion = TrajectoryLoss()
         
         # Initialize validation metrics
         self.val_step_outputs = []
-    
+        
     def forward(self, batch: Dict) -> List[Dict]:
         return self.net(batch)
     
@@ -141,14 +125,14 @@ class E2EPerceptionModule(L.LightningModule):
         # Create optimizer
         optimizer = Adam(
             self.parameters(),
-            lr=self.hparams.learning_rate,
-            weight_decay=self.hparams.weight_decay
+            lr=self.config.training.learning_rate,
+            weight_decay=self.config.training.weight_decay
         )
         
         # Create scheduler
         scheduler = CosineAnnealingLR(
             optimizer,
-            T_max=self.hparams.max_epochs,
+            T_max=self.config.training.max_epochs,
             eta_min=1e-6
         )
         

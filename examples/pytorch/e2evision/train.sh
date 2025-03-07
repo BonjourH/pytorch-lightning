@@ -16,7 +16,6 @@ ACCELERATOR=${ACCELERATOR:-"gpu"}
 DEVICES=${DEVICES:-1}
 PRECISION=${PRECISION:-"16-mixed"} # 16-mixed, 32, 64
 ACCUMULATE_GRAD_BATCHES=${ACCUMULATE_GRAD_BATCHES:-4}
-BACKBONE=${BACKBONE:-"repvgg_a0"}
 NUM_QUERIES=${NUM_QUERIES:-16}
 SEED=${SEED:-42}
 RESUME=${RESUME:-0}
@@ -59,7 +58,6 @@ LOG_FILE="${LOG_DIR}/${EXP_NAME}.log"
     echo "  Accelerator: ${ACCELERATOR}"
     echo "  Devices: ${DEVICES}"
     echo "  Precision: ${PRECISION}"
-    echo "  Backbone: ${BACKBONE}"
     echo "  Num Queries: ${NUM_QUERIES}"
     echo "  Seed: ${SEED}"
     echo "  Resume: ${RESUME}"
@@ -98,8 +96,7 @@ LOG_FILE="${LOG_DIR}/${EXP_NAME}.log"
     CONFIG_OVERRIDES+=("training.seed=${SEED}")
     CONFIG_OVERRIDES+=("training.pretrained_weights=${PRETRAINED_WEIGHTS}")
     CONFIG_OVERRIDES+=("training.limit_val_batches=${LIMIT_VAL_BATCHES}")
-    CONFIG_OVERRIDES+=("model.backbone=${BACKBONE}")
-    CONFIG_OVERRIDES+=("model.num_queries=${NUM_QUERIES}")
+    CONFIG_OVERRIDES+=("model.decoder.num_queries=${NUM_QUERIES}")
     CONFIG_OVERRIDES+=("logging.checkpoint_dir=${CHECKPOINT_DIR}")
     CONFIG_OVERRIDES+=("logging.log_dir=${LOG_DIR}")
     CONFIG_OVERRIDES+=("logging.run_id=${RUN_ID}")

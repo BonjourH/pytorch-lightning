@@ -55,20 +55,11 @@ def main():
         val_list=config.training.val_list,
         batch_size=config.training.batch_size,
         num_workers=config.training.num_workers,
-        camera_ids=config.data.camera_ids
+        data_config=config.data
     )
     
     # Create model
-    model = E2EPerceptionModule(
-        camera_ids=config.data.camera_ids,
-        feature_dim=config.model.feature_dim,
-        num_queries=config.model.num_queries,
-        num_decoder_layers=config.model.num_decoder_layers,
-        backbone=config.model.backbone,
-        learning_rate=config.training.learning_rate,
-        weight_decay=config.training.weight_decay,
-        use_pretrained=config.training.pretrained_weights
-    )
+    model = E2EPerceptionModule(config=config)
     
     # Create loggers
     experiment_name = args.experiment_name if args.experiment_name else f"e2e_perception_{time.strftime('%Y%m%d')}"

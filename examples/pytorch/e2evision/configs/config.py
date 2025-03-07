@@ -28,6 +28,53 @@ class ConfigBase:
             _update(self, key_path, value)
 
 @dataclass
+class CameraGroupConfig(ConfigBase):
+    """Camera group configuration"""
+    name: str = ''
+    camera_group: List[SourceCameraId] = field(default_factory=list)
+    image_size: tuple = (800, 416)
+    normalize_mean: tuple = (0.485, 0.456, 0.406)
+    normalize_std: tuple = (0.229, 0.224, 0.225)
+    backbone: str = 'resnet18'
+    out_channels: int = 256
+    fpn_channels: int = 256
+    downsample_scale: int = 32
+    use_pretrained: bool = True
+    
+    @classmethod
+    def long_focal_length_camera_group(cls):
+        return cls(name='long_focal_length_camera', 
+                   camera_group=[SourceCameraId.FRONT_LEFT_CAMERA, SourceCameraId.FRONT_RIGHT_CAMERA,
+                                 SourceCameraId.REAR_LEFT_CAMERA, SourceCameraId.REAR_RIGHT_CAMERA],
+                   image_size=(800, 416),
+                   backbone='resnet18',
+                   downsample_scale=8)
+    
+    @classmethod
+    def front_stereo_camera_group(cls):
+        return cls(name='front_stereo_camera', 
+                   camera_group=[SourceCameraId.FRONT_LEFT_CAMERA, SourceCameraId.FRONT_RIGHT_CAMERA],
+                   image_size=(800, 416),
+                   backbone='resnet18',
+                   downsample_scale=4)
+    
+    @classmethod
+    def short_focal_length_camera_group(cls):
+        return cls(name='short_focal_length_camera', 
+                   camera_group=[SourceCameraId.SIDE_LEFT_CAMERA, SourceCameraId.SIDE_RIGHT_CAMERA, SourceCameraId.FRONT_CENTER_CAMERA],
+                   image_size=(400, 256),
+                   backbone='repvgg_a1',
+                   downsample_scale=16)
+    
+    @classmethod    
+    def rear_camera_group(cls):
+        return cls(name='rear_camera', 
+                   camera_group=[SourceCameraId.REAR_LEFT_CAMERA, SourceCameraId.REAR_RIGHT_CAMERA],
+                   image_size=(800, 416),
+                   backbone='repvgg_a1',
+                   downsample_scale=8)
+
+@dataclass
 class DataConfig(ConfigBase):
     """Data configuration."""
     train_list: str = "train_clips.txt"
@@ -36,9 +83,6 @@ class DataConfig(ConfigBase):
     sequence_length: int = 10
     batch_size: int = 1
     num_workers: int = 20
-    image_size: tuple = (800, 416)
-    normalize_mean: tuple = (0.485, 0.456, 0.406)
-    normalize_std: tuple = (0.229, 0.224, 0.225)
     camera_ids: List[SourceCameraId] = field(default_factory=lambda: [
         SourceCameraId.FRONT_CENTER_CAMERA,
         SourceCameraId.FRONT_LEFT_CAMERA,
@@ -48,16 +92,25 @@ class DataConfig(ConfigBase):
         SourceCameraId.REAR_LEFT_CAMERA,
         SourceCameraId.REAR_RIGHT_CAMERA
     ])
+    camera_groups: List[CameraGroupConfig] = field(default_factory=lambda: [
+        CameraGroupConfig.front_stereo_camera_group(),
+        CameraGroupConfig.short_focal_length_camera_group(),
+        CameraGroupConfig.rear_camera_group()
+    ])
 
+@dataclass
+class DecoderConfig(ConfigBase):
+    """Decoder configuration"""
+    num_layers: int = 6
+    num_queries: int = 128
+    feature_dim: int = 256
+    hidden_dim: int = 512
+    num_points: int = 25
 
 @dataclass
 class ModelConfig(ConfigBase):
     """Model configuration"""
-    feature_dim: int = 256
-    num_queries: int = 16
-    num_decoder_layers: int = 6
-    backbone: str = 'resnet18'
-
+    decoder: DecoderConfig = field(default_factory=DecoderConfig)
 
 @dataclass
 class TrainingConfig(ConfigBase):

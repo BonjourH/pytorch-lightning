@@ -4,22 +4,20 @@ from typing import List, Optional
 from torch.utils.data import DataLoader
 from torchvision import transforms
 
-from base import SourceCameraId
-from .dataset import MultiFrameDataset, custom_collate_fn
+from e2e_dataset.dataset import MultiFrameDataset, custom_collate_fn
+from configs.config import DataConfig
 
 class E2EPerceptionDataModule(L.LightningDataModule):
     """Lightning data module for end-to-end perception."""
     
     def __init__(self,
-                 camera_ids: List[SourceCameraId],
                  train_list: str,
                  val_list: str,
-                 sequence_length: int = 10,
                  batch_size: int = 2,
-                 num_workers: int = 4):
+                 num_workers: int = 4,
+                 data_config: DataConfig = DataConfig()):
         super().__init__()
         self.save_hyperparameters(ignore=['camera_ids'])
-        self.camera_ids = camera_ids
         
         # Initialize datasets to None
         self.train_dataset: Optional[MultiFrameDataset] = None
@@ -52,14 +50,12 @@ class E2EPerceptionDataModule(L.LightningDataModule):
             # Create datasets
             self.train_dataset = MultiFrameDataset(
                 clip_dirs=train_clips,
-                camera_ids=self.camera_ids,
-                sequence_length=self.hparams.sequence_length
+                config=self.hparams.data_config
             )
             
             self.val_dataset = MultiFrameDataset(
                 clip_dirs=val_clips,
-                camera_ids=self.camera_ids,
-                sequence_length=self.hparams.sequence_length
+                config=self.hparams.data_config
             )
         
         elif stage == "validate":
@@ -70,9 +66,11 @@ class E2EPerceptionDataModule(L.LightningDataModule):
                 
                 self.val_dataset = MultiFrameDataset(
                     clip_dirs=val_clips,
-                    camera_ids=self.camera_ids,
-                    sequence_length=self.hparams.sequence_length
+                    config=self.hparams.data_config
                 )
+        else:
+            raise ValueError(f"Invalid stage: {stage}")
+        print(f"Successfully setup datasets")
     
     def train_dataloader(self):
         return DataLoader(
@@ -93,3 +91,12 @@ class E2EPerceptionDataModule(L.LightningDataModule):
             collate_fn=custom_collate_fn,
             pin_memory=True
         ) 
+
+
+if __name__ == "__main__":
+    datamodule = E2EPerceptionDataModule(
+        train_list="train_clips.txt",
+        val_list="val_clips.txt",
+        data_config=DataConfig()
+    )
+    datamodule.setup()
