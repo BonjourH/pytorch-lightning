@@ -58,6 +58,38 @@ class TrajectoryQueryRefineLayer(nn.Module):
         queries = self.norm3(queries + self.dropout(queries2))
         
         return queries 
+
+class CrossAttentionTrajHead(nn.Module):
+    def __init__(self, query_dim, hidden_dim, num_heads):
+        super(CrossAttentionTrajHead, self).__init__()
+        
+        # Cross-attention layer
+        self.attention = nn.MultiheadAttention(embed_dim=query_dim, num_heads=num_heads)
+        
+        # Prediction head
+        self.traj_head = nn.Sequential(
+            nn.Linear(query_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, TrajParamIndex.END_OF_INDEX)
+        )
+        
+    def forward(self, queries):
+        """
+        queries: Tensor of shape (n_queries, batch_size, query_dim)
+        """
+
+        # Cross-attention: The queries interact with each other
+        # We need to reshape the queries into (seq_len, batch_size, input_dim)
+        attn_output, attn_output_weights = self.attention(queries, queries, queries)
+        
+        # The result is the updated queries after attention
+        # You can optionally apply a pooling operation like mean pooling or just use the result as is.
+        pooled_output = attn_output.mean(dim=0)  # Shape: (batch_size, query_dim)
+        
+        # Pass the result through the trajectory head for prediction
+        prediction = self.traj_head(pooled_output)  # Shape: (batch_size, END_OF_INDEX)
+        
+        return prediction
     
 class TrajectoryDecoder(nn.Module):
     """Decode trajectories from features."""
