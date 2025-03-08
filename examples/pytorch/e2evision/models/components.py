@@ -70,7 +70,8 @@ class CrossAttentionTrajHead(nn.Module):
         self.traj_head = nn.Sequential(
             nn.Linear(query_dim, hidden_dim),
             nn.ReLU(),
-            nn.Linear(hidden_dim, TrajParamIndex.END_OF_INDEX)
+            nn.Linear(hidden_dim, TrajParamIndex.END_OF_INDEX),
+            nn.Sigmoid()
         )
         
     def forward(self, queries):
@@ -122,7 +123,8 @@ class TrajectoryDecoder(nn.Module):
         self.traj_head = nn.Sequential(
             nn.Linear(query_dim, hidden_dim),
             nn.ReLU(),
-            nn.Linear(hidden_dim, TrajParamIndex.END_OF_INDEX)
+            nn.Linear(hidden_dim, TrajParamIndex.END_OF_INDEX),
+            nn.Sigmoid()
         )
         
         self.feature_mlp = nn.Sequential(
@@ -144,6 +146,20 @@ class TrajectoryDecoder(nn.Module):
         for p in self.parameters():
             if p.dim() > 1:
                 nn.init.kaiming_normal_(p, nonlinearity='relu')
+    
+    def decode_trajectory(self, x: torch.Tensor) -> torch.Tensor:
+        """ Decode trajectory from features."""
+        # 原始前向计算
+        traj_params = self.traj_head(x)
+        
+        # 创建新张量，避免原地操作
+        scaled_part = traj_params[..., :TrajParamIndex.HEIGHT + 1] * self.motion_ranges + self.motion_min_vals
+        unchanged_part = traj_params[..., TrajParamIndex.HEIGHT + 1:]
+        
+        # 合并两部分
+        new_traj_params = torch.cat([scaled_part, unchanged_part], dim=-1)
+        
+        return new_traj_params
     
     def forward(self, 
                 features_dict: Dict[SourceCameraId, torch.Tensor],
@@ -170,8 +186,8 @@ class TrajectoryDecoder(nn.Module):
         # Decoder iteratively refines trajectory parameters
         for layer in self.layers:
             # 1. Predict parameters from current queries
-            traj_params = self.traj_head(queries) 
-            # Dict[traj_params: Tensor[B, N, TrajParamIndex.END_OF_INDEX], type_logits: Tensor[B, N, len(ObjectType)]]
+            traj_params = self.decode_trajectory(queries) 
+            # traj_params: Tensor[B, N, TrajParamIndex.END_OF_INDEX]
             outputs.append(traj_params)
             
             # 2. Sample points on predicted objects
@@ -190,7 +206,7 @@ class TrajectoryDecoder(nn.Module):
             
             
         # Get final predictions
-        outputs.append(self.traj_head(queries))
+        outputs.append(self.decode_trajectory(queries))
         
         return outputs
     

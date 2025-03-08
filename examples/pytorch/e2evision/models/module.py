@@ -5,7 +5,7 @@ from typing import Dict, List, Optional, Union
 from torch.optim import Adam
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
-from base import SourceCameraId
+from base import SourceCameraId, TrajParamIndex
 from models.network import E2EPerceptionNet
 from models.loss import TrajectoryLoss
 from configs.config import Config
@@ -115,8 +115,8 @@ class E2EPerceptionModule(L.LightningModule):
             print(f"  Targets shape: {gt_trajs.shape}")
             
             # Filter valid predictions and targets
-            valid_mask_preds = pred_trajs[..., TrajectoryLoss.HAS_OBJECT_FLAG] > 0.5  # HAS_OBJECT flag
-            valid_mask_targets = gt_trajs[..., TrajectoryLoss.HAS_OBJECT_FLAG] > 0.5
+            valid_mask_preds = pred_trajs[..., TrajParamIndex.HAS_OBJECT] > 0.5  # HAS_OBJECT flag
+            valid_mask_targets = gt_trajs[..., TrajParamIndex.HAS_OBJECT] > 0.5
             
             print(f"  Valid predictions: {valid_mask_preds.sum().item()}")
             print(f"  Valid targets: {valid_mask_targets.sum().item()}")

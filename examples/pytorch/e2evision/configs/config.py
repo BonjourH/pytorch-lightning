@@ -126,7 +126,7 @@ class TrainingConfig(ConfigBase):
     accumulate_grad_batches: int = 4
     seed: int = 42
     pretrained_weights: bool = True
-    limit_val_batches: float = 0.1  # 1.0: validate all batches, 0.1: validate 10% of batches
+    limit_val_batches: float = 1  # 1: one batch, 0.1: validate 10% of batches, 1.0: validate all batches
     # 优化器配置
     learning_rate: float = 1e-4
     weight_decay: float = 1e-4
@@ -187,15 +187,15 @@ class LossConfig(ConfigBase):
     weight_dict: Dict[str, float] = field(default_factory=lambda: {
         'loss_pos': 1.0,
         'loss_dim': 1.0,
-        'loss_vel': 1.0,
-        'loss_yaw': 1.0,
+        'loss_vel': 0.5,
+        'loss_yaw': 0.5,
         'loss_type': 1.0,
-        'loss_acc': 1.0,
+        'loss_acc': 0.1,
         'loss_attr': 1.0,
         'fp_loss_exist': 1.0
     })
     layer_loss_weights: List[float] = field(default_factory=lambda: [
-        1.0, 1.0, 1.0, 1.0, 1.0, 1.0
+        0.1, 0.3, 0.5, 0.7, 0.9, 1.0
     ])
     aux_loss_weight: float = 0.5
     frames: int = 10

@@ -157,6 +157,16 @@ class TrajectoryLoss(nn.Module):
         for b in range(batch_size):
             pred_idx, gt_idx = indices_list[b]
             
+            # 计算当前批次中正样本和负样本的比例
+            num_positive = len(pred_idx)
+            num_queries = pred_trajs.shape[1]
+            num_negative = num_queries - num_positive
+            
+            # 计算自适应权重 - 负样本权重随着它们比例的增加而减小
+            # 使用基于正负样本比例的平衡因子
+            pos_weight = 1.0  # 正样本权重保持为1
+            neg_weight = min(1.0, (num_positive / max(1, num_negative)) * 2.0)  # 负样本权重自适应调整
+            
             # 获取匹配的预测和真实轨迹
             pred_matched = pred_trajs[b, pred_idx]  # [K, TrajParamIndex.END_OF_INDEX]
             gt_matched = gt_trajs[b, gt_idx]  # [K, TrajParamIndex.END_OF_INDEX]
@@ -194,8 +204,8 @@ class TrajectoryLoss(nn.Module):
             
             # 属性损失 (static, occluded) - 保留BCE损失，因为这是二元属性
             loss_attr += F.binary_cross_entropy_with_logits(
-                pred_matched[:, TrajParamIndex.STATIC:TrajParamIndex.OCCLUDED+1],
-                gt_matched[:, TrajParamIndex.STATIC:TrajParamIndex.OCCLUDED+1]
+                pred_matched[:, TrajParamIndex.HAS_OBJECT:TrajParamIndex.OCCLUDED+1],
+                gt_matched[:, TrajParamIndex.HAS_OBJECT:TrajParamIndex.OCCLUDED+1]
             )
             
             # 类型损失 (one-hot encoded object type) - 保留BCE损失，因为这是分类问题
@@ -212,28 +222,23 @@ class TrajectoryLoss(nn.Module):
                 # 获取未匹配的预测
                 pred_unmatched = pred_trajs[b, unmatched_pred_idx]
                 
-                # 计算假阳性存在损失 - 所有未匹配的预测应该有 HAS_OBJECT=0
-                fp_loss_exist += F.binary_cross_entropy_with_logits(
+                # 计算假阳性存在损失 - 使用自适应权重
+                fp_loss = F.binary_cross_entropy_with_logits(
                     pred_unmatched[:, TrajParamIndex.HAS_OBJECT:TrajParamIndex.HAS_OBJECT+1],
-                    torch.zeros_like(pred_unmatched[:, TrajParamIndex.HAS_OBJECT:TrajParamIndex.HAS_OBJECT+1])
+                    torch.zeros_like(pred_unmatched[:, TrajParamIndex.HAS_OBJECT:TrajParamIndex.HAS_OBJECT+1]),
+                    reduction='none'  # 不立即求平均，以便应用权重
                 )
                 
-                # 只对那些预测为有物体的未匹配预测计算额外的假阳性损失
-                # 这样可以更强烈地惩罚那些错误地高置信度预测
-                fp_high_conf = pred_unmatched[:, TrajParamIndex.HAS_OBJECT] > 0.5
-                if fp_high_conf.any():
-                    high_conf_fp = pred_unmatched[fp_high_conf]
-                    
-                    # 对于高置信度的假阳性，我们希望它们的类型预测也是低置信度的
-                    # 使用均匀分布作为目标（所有类型概率相等）
-                    num_classes = TrajParamIndex.UNKNOWN - TrajParamIndex.CAR + 1
-                    uniform_target = torch.ones_like(high_conf_fp[:, TrajParamIndex.CAR:TrajParamIndex.UNKNOWN+1]) / num_classes
-                    
-                    # 添加类型损失
-                    fp_loss_exist += 0.2 * F.binary_cross_entropy_with_logits(
-                        high_conf_fp[:, TrajParamIndex.CAR:TrajParamIndex.UNKNOWN+1],
-                        uniform_target
-                    )
+                # 应用自适应权重
+                fp_loss = fp_loss * neg_weight
+                
+                # 求和或平均
+                fp_loss_exist += fp_loss.mean()
+                
+                # 输出当前批次的样本比例和权重信息（可选，用于调试）
+                # if b % 100 == 0:  # 每100个批次输出一次
+                #     print(f"Batch {b}, Positive: {num_positive}, Negative: {num_negative}, "
+                #           f"Neg/Pos Ratio: {num_negative/max(1, num_positive):.2f}, Neg Weight: {neg_weight:.4f}")
                 
                 total_fp += len(unmatched_pred_idx)
             
@@ -255,7 +260,7 @@ class TrajectoryLoss(nn.Module):
         else:
             # 如果没有假阳性，我们仍然需要确保梯度流动
             # 创建一个小的常数损失，这样即使没有假阳性，模型也能学习
-            fp_loss_exist = torch.tensor(0.01, device=pred_trajs.device)
+            fp_loss_exist = torch.tensor(0.0001, device=pred_trajs.device)
         
         # 获取层索引并应用层权重
         layer_idx = int(prefix.split('_')[1]) - 4  # 从layer_4开始，所以减4

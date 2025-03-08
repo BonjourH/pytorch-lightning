@@ -23,7 +23,7 @@ PRETRAINED_WEIGHTS=${PRETRAINED_WEIGHTS:-"true"}
 RUN_ID=${RUN_ID:-0}
 CONFIG_FILE=${CONFIG_FILE:-"configs/e2e_perception.yaml"}
 VALIDATE_ONLY=${VALIDATE_ONLY:-0}  # 0: train and validate, 1: validate only
-LIMIT_VAL_BATCHES=${LIMIT_VAL_BATCHES:-1.0}  # 1.0: validate all batches, 0.1: validate 10% of batches
+LIMIT_VAL_BATCHES=${LIMIT_VAL_BATCHES:-1}  # 1.0: validate all batches, 0.1: validate 10% of batches, 1: one batch
 GRADIENT_CLIP_VAL=${GRADIENT_CLIP_VAL:-1.0}  # 添加梯度裁剪值
 MEMORY_EFFICIENT=${MEMORY_EFFICIENT:-1}  # 添加内存效率选项
 # Create log directory
@@ -109,6 +109,7 @@ LOG_FILE="${LOG_DIR}/${EXP_NAME}.log"
     CONFIG_OVERRIDES+=("training.limit_val_batches=${LIMIT_VAL_BATCHES}")
     CONFIG_OVERRIDES+=("training.gradient_clip_val=${GRADIENT_CLIP_VAL}")  # 添加梯度裁剪配置
     CONFIG_OVERRIDES+=("model.memory_efficient=${MEMORY_EFFICIENT}")  # 添加内存效率配置
+    CONFIG_OVERRIDES+=("model.decoder.num_queries=${NUM_QUERIES}")
     CONFIG_OVERRIDES+=("logging.checkpoint_dir=${CHECKPOINT_DIR}")
     CONFIG_OVERRIDES+=("logging.log_dir=${LOG_DIR}")
     CONFIG_OVERRIDES+=("logging.run_id=${RUN_ID}")

@@ -2,14 +2,12 @@
 set -euo pipefail  # 严格的错误处理模式
 
 # 创建日志和结果目录
-LOG_DIR="logs"
-RESULTS_DIR="results"
-CHECKPOINT_DIR="checkpoints"
-mkdir -p "${LOG_DIR}" "${RESULTS_DIR}" "${CHECKPOINT_DIR}"
+RESULTS_DIR="tmp_results"
+mkdir -p "${RESULTS_DIR}" 
 
 # 推理参数，可通过环境变量覆盖默认值
 # 注意：这些参数会覆盖配置文件中的参数
-TEST_LIST=${TEST_LIST:-"val_clips.txt"}
+TEST_LIST=${TEST_LIST:-"test_clips.txt"}
 BATCH_SIZE=${BATCH_SIZE:-1}
 NUM_WORKERS=${NUM_WORKERS:-20}
 ACCELERATOR=${ACCELERATOR:-"gpu"}
@@ -24,7 +22,7 @@ TIMESTAMP=$(date +%Y%m%d || echo "default")
 EXP_NAME="e2e_perception_inference_${TIMESTAMP}"
 
 # 设置日志文件
-LOG_FILE="${LOG_DIR}/${EXP_NAME}.log"
+LOG_FILE="${RESULTS_DIR}/${EXP_NAME}.log"
 
 # 捕获输出并记录日志
 {
@@ -64,7 +62,7 @@ LOG_FILE="${LOG_DIR}/${EXP_NAME}.log"
     
     # 添加基本参数
     INFERENCE_CMD="${INFERENCE_CMD} --output_dir ${RESULTS_DIR}/${EXP_NAME}"
-    INFERENCE_CMD="${INFERENCE_CMD} --checkpoint ${CHECKPOINT_DIR}/${CHECKPOINT}"
+    INFERENCE_CMD="${INFERENCE_CMD} --checkpoint checkpoints/last.ckpt"
     INFERENCE_CMD="${INFERENCE_CMD} --test_list ${TEST_LIST}"
     INFERENCE_CMD="${INFERENCE_CMD} --config_file ${CONFIG_FILE}"
     
@@ -72,13 +70,13 @@ LOG_FILE="${LOG_DIR}/${EXP_NAME}.log"
     CONFIG_OVERRIDES=()
     
     # 添加每个参数到覆盖数组
-    CONFIG_OVERRIDES+=("inference.batch_size=${BATCH_SIZE}")
-    CONFIG_OVERRIDES+=("inference.num_workers=${NUM_WORKERS}")
-    CONFIG_OVERRIDES+=("inference.accelerator=${ACCELERATOR}")
-    CONFIG_OVERRIDES+=("inference.devices=${DEVICES}")
-    CONFIG_OVERRIDES+=("inference.precision=${PRECISION}")
-    CONFIG_OVERRIDES+=("inference.confidence_threshold=${CONFIDENCE_THRESHOLD}")
-    CONFIG_OVERRIDES+=("inference.output_dir=${RESULTS_DIR}/${EXP_NAME}")
+    CONFIG_OVERRIDES+=("predict.batch_size=${BATCH_SIZE}")
+    CONFIG_OVERRIDES+=("predict.num_workers=${NUM_WORKERS}")
+    CONFIG_OVERRIDES+=("predict.accelerator=${ACCELERATOR}")
+    CONFIG_OVERRIDES+=("predict.devices=${DEVICES}")
+    CONFIG_OVERRIDES+=("predict.precision=${PRECISION}")
+    CONFIG_OVERRIDES+=("predict.confidence_threshold=${CONFIDENCE_THRESHOLD}")
+    CONFIG_OVERRIDES+=("predict.output_dir=${RESULTS_DIR}/${EXP_NAME}")
     
     # 添加配置覆盖参数
     if [ ${#CONFIG_OVERRIDES[@]} -gt 0 ]; then

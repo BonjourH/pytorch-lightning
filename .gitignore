@@ -212,7 +212,7 @@ tb_logs/
 *checkpoint*
 *train_clips.txt*
 *val_clips.txt*
-*test_list.txt*
+*test_clips.txt*
 *logs*
 *.log
 *.log.*
@@ -220,3 +220,4 @@ tb_logs/
 *.log.*.*.*
 *.log.*.*.*.*
 *.log.*.*.*.*.*
+*tmp_results*
