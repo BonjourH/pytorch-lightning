@@ -115,7 +115,7 @@ class E2EPerceptionModule(L.LightningModule):
             print(f"  Targets shape: {gt_trajs.shape}")
             
             # Filter valid predictions and targets
-            valid_mask_preds = pred_trajs[..., TrajParamIndex.HAS_OBJECT] > 0.5  # HAS_OBJECT flag
+            valid_mask_preds = torch.sigmoid(pred_trajs[..., TrajParamIndex.HAS_OBJECT]) > 0.5  # HAS_OBJECT flag
             valid_mask_targets = gt_trajs[..., TrajParamIndex.HAS_OBJECT] > 0.5
             
             print(f"  Valid predictions: {valid_mask_preds.sum().item()}")

@@ -67,11 +67,16 @@ class CrossAttentionTrajHead(nn.Module):
         self.attention = nn.MultiheadAttention(embed_dim=query_dim, num_heads=num_heads)
         
         # Prediction head
-        self.traj_head = nn.Sequential(
+        self.motion_head = nn.Sequential(
             nn.Linear(query_dim, hidden_dim),
             nn.ReLU(),
-            nn.Linear(hidden_dim, TrajParamIndex.END_OF_INDEX),
+            nn.Linear(hidden_dim, TrajParamIndex.HEIGHT + 1),
             nn.Sigmoid()
+        )
+        self.cls_head = nn.Sequential(
+            nn.Linear(query_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, TrajParamIndex.END_OF_INDEX - TrajParamIndex.HEIGHT - 1)
         )
         
     def forward(self, queries):
@@ -88,7 +93,11 @@ class CrossAttentionTrajHead(nn.Module):
         pooled_output = attn_output.mean(dim=0)  # Shape: (batch_size, query_dim)
         
         # Pass the result through the trajectory head for prediction
-        prediction = self.traj_head(pooled_output)  # Shape: (batch_size, END_OF_INDEX)
+        motion_params = self.motion_head(pooled_output)  # Shape: (batch_size, TrajParamIndex.HEIGHT + 1)
+        cls_params = self.cls_head(pooled_output)  # Shape: (batch_size, TrajParamIndex.END_OF_INDEX - TrajParamIndex.HEIGHT - 1)
+        
+        # Combine motion and cls parameters
+        prediction = torch.cat([motion_params, cls_params], dim=-1)  # Shape: (batch_size, TrajParamIndex.END_OF_INDEX)
         
         return prediction
     
@@ -119,12 +128,17 @@ class TrajectoryDecoder(nn.Module):
         self.register_buffer('motion_min_vals', ranges[:, 0])
         self.register_buffer('motion_ranges', ranges[:, 1] - ranges[:, 0])
          
-        # Single trajectory parameter head that outputs all trajectory parameters
-        self.traj_head = nn.Sequential(
+        # Single trajectory parameter head that outputs all trajectory parameters        
+        self.motion_head = nn.Sequential(
             nn.Linear(query_dim, hidden_dim),
             nn.ReLU(),
-            nn.Linear(hidden_dim, TrajParamIndex.END_OF_INDEX),
+            nn.Linear(hidden_dim, TrajParamIndex.HEIGHT + 1),
             nn.Sigmoid()
+        )
+        self.cls_head = nn.Sequential(
+            nn.Linear(query_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, TrajParamIndex.END_OF_INDEX - TrajParamIndex.HEIGHT - 1)
         )
         
         self.feature_mlp = nn.Sequential(
@@ -150,16 +164,12 @@ class TrajectoryDecoder(nn.Module):
     def decode_trajectory(self, x: torch.Tensor) -> torch.Tensor:
         """ Decode trajectory from features."""
         # 原始前向计算
-        traj_params = self.traj_head(x)
+        motion_params = self.motion_head(x)
+        motion_params = motion_params * self.motion_ranges + self.motion_min_vals
+        cls_params = self.cls_head(x)
         
-        # 创建新张量，避免原地操作
-        scaled_part = traj_params[..., :TrajParamIndex.HEIGHT + 1] * self.motion_ranges + self.motion_min_vals
-        unchanged_part = traj_params[..., TrajParamIndex.HEIGHT + 1:]
-        
-        # 合并两部分
-        new_traj_params = torch.cat([scaled_part, unchanged_part], dim=-1)
-        
-        return new_traj_params
+        traj_params = torch.cat([motion_params, cls_params], dim=-1)
+        return traj_params
     
     def forward(self, 
                 features_dict: Dict[SourceCameraId, torch.Tensor],

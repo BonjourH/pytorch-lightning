@@ -3,6 +3,8 @@ import lightning as L
 from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.callbacks import LearningRateMonitor
 from lightning.pytorch.loggers import TensorBoardLogger, CSVLogger, WandbLogger
+from lightning.pytorch.strategies import DeepSpeedStrategy
+
 import argparse
 import warnings
 import sys

@@ -47,16 +47,17 @@ class PredictionWriter(L.Callback):
                 batch_traj_vecs = last_layer_outputs[i]
                 sorted_indices = torch.argsort(batch_traj_vecs[:, TrajParamIndex.HAS_OBJECT], descending=True)
                 batch_traj_vecs = batch_traj_vecs[sorted_indices]
-                print(f"\n query idx {sorted_indices[0]} has largest confidence of having object: {batch_traj_vecs[0][TrajParamIndex.HAS_OBJECT]:.2f},"
+                print(f"\n query idx {sorted_indices[0]} has largest confidence of having object: {torch.sigmoid(batch_traj_vecs[0][TrajParamIndex.HAS_OBJECT]):.2f},"
                       f"\n position: {batch_traj_vecs[0][TrajParamIndex.X]:.2f}, {batch_traj_vecs[0][TrajParamIndex.Y]:.2f}, {batch_traj_vecs[0][TrajParamIndex.Z]:.2f}"
                       f"\n dimension: {batch_traj_vecs[0][TrajParamIndex.LENGTH]:.2f}, {batch_traj_vecs[0][TrajParamIndex.WIDTH]:.2f}, {batch_traj_vecs[0][TrajParamIndex.HEIGHT]:.2f}"
                       f"\n velocity: {batch_traj_vecs[0][TrajParamIndex.VX]:.2f}, {batch_traj_vecs[0][TrajParamIndex.VY]:.2f},"
                       f"\n acceleration: {batch_traj_vecs[0][TrajParamIndex.AX]:.3f}, {batch_traj_vecs[0][TrajParamIndex.AY]:.3f}")
+                import pdb; pdb.set_trace()
                 
             for j in range(last_layer_outputs.shape[1]):
                 traj_vec = last_layer_outputs[i][j]
-                if traj_vec[TrajParamIndex.HAS_OBJECT] > 0.5:
-                    valid_trajs.append(tensor_to_trajectory(traj_vec))
+                if torch.sigmoid(traj_vec[TrajParamIndex.HAS_OBJECT]) > 0.5:
+                    valid_trajs.append(tensor_to_trajectory(traj_vec).to_dict)
         
         print(f"This batch has {len(valid_trajs)} valid predictions")
         

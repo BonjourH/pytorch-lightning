@@ -16,6 +16,7 @@ PRECISION=${PRECISION:-"16-mixed"}
 CONFIDENCE_THRESHOLD=${CONFIDENCE_THRESHOLD:-0.5}
 CHECKPOINT=${CHECKPOINT:-"last.ckpt"}  # 默认使用保存的最新模型
 CONFIG_FILE=${CONFIG_FILE:-"configs/e2e_perception.yaml"}
+NUM_QUERIES=${NUM_QUERIES:-64}
 
 # 创建带时间戳的实验名称
 TIMESTAMP=$(date +%Y%m%d || echo "default")
@@ -70,6 +71,7 @@ LOG_FILE="${RESULTS_DIR}/${EXP_NAME}.log"
     CONFIG_OVERRIDES=()
     
     # 添加每个参数到覆盖数组
+    CONFIG_OVERRIDES+=("model.decoder.num_queries=${NUM_QUERIES}")
     CONFIG_OVERRIDES+=("predict.batch_size=${BATCH_SIZE}")
     CONFIG_OVERRIDES+=("predict.num_workers=${NUM_WORKERS}")
     CONFIG_OVERRIDES+=("predict.accelerator=${ACCELERATOR}")

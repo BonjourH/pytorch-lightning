@@ -60,11 +60,11 @@ def match_trajectories(
             
             score = iou * 0.6 + dist_score * 0.4
             
-            if pred_trajs[i, TrajParamIndex.HAS_OBJECT] < 0.5:
+            if torch.sigmoid(pred_trajs[i, TrajParamIndex.HAS_OBJECT]) < 0.5:
                 score *= 0.5
             
             obj_index = int(torch.argmax(pred_trajs[i][TrajParamIndex.CAR:]))
-            if gt_trajs[j, obj_index] != 1:
+            if gt_trajs[j, obj_index] != 1.0:
                 score *= 0.5
             
             # Combined cost
@@ -146,10 +146,9 @@ class TrajectoryLoss(nn.Module):
         dim_loss = 0
         vel_loss = 0
         yaw_loss = 0
-        type_loss = 0
         fp_loss_exist = 0  # 假阳性损失
         loss_acc = 0
-        loss_attr = 0
+        loss_cls = 0
         
         total_objects = 0
         total_fp = 0  # 跟踪假阳性总数
@@ -202,16 +201,10 @@ class TrajectoryLoss(nn.Module):
                 gt_matched[:, TrajParamIndex.YAW:TrajParamIndex.YAW+1]
             )
             
-            # 属性损失 (static, occluded) - 保留BCE损失，因为这是二元属性
-            loss_attr += F.binary_cross_entropy_with_logits(
-                pred_matched[:, TrajParamIndex.HAS_OBJECT:TrajParamIndex.OCCLUDED+1],
-                gt_matched[:, TrajParamIndex.HAS_OBJECT:TrajParamIndex.OCCLUDED+1]
-            )
-            
-            # 类型损失 (one-hot encoded object type) - 保留BCE损失，因为这是分类问题
-            type_loss += F.binary_cross_entropy_with_logits(
-                pred_matched[:, TrajParamIndex.CAR:TrajParamIndex.UNKNOWN+1],
-                gt_matched[:, TrajParamIndex.CAR:TrajParamIndex.UNKNOWN+1]
+            # classification loss
+            loss_cls += F.binary_cross_entropy_with_logits(
+                pred_matched[:, TrajParamIndex.HAS_OBJECT:],
+                gt_matched[:, TrajParamIndex.HAS_OBJECT:]
             )
             
             # 计算未匹配的预测（假阳性）
@@ -250,9 +243,8 @@ class TrajectoryLoss(nn.Module):
             dim_loss /= total_objects
             vel_loss /= total_objects
             yaw_loss /= total_objects
-            type_loss /= total_objects
             loss_acc /= total_objects
-            loss_attr /= total_objects
+            loss_cls /= total_objects
         
         # 归一化假阳性损失
         if total_fp > 0:
@@ -271,9 +263,8 @@ class TrajectoryLoss(nn.Module):
         losses[prefix + 'loss_dim'] = dim_loss * self.weight_dict['loss_dim'] * layer_weight
         losses[prefix + 'loss_vel'] = vel_loss * self.weight_dict['loss_vel'] * layer_weight
         losses[prefix + 'loss_yaw'] = yaw_loss * self.weight_dict['loss_yaw'] * layer_weight
-        losses[prefix + 'loss_type'] = type_loss * self.weight_dict['loss_type'] * layer_weight
         losses[prefix + 'loss_acc'] = loss_acc * self.weight_dict['loss_acc'] * layer_weight
-        losses[prefix + 'loss_attr'] = loss_attr * self.weight_dict['loss_attr'] * layer_weight
+        losses[prefix + 'loss_cls'] = loss_cls * self.weight_dict['loss_cls'] * layer_weight
         losses[prefix + 'fp_loss_exist'] = fp_loss_exist * self.weight_dict['fp_loss_exist'] * layer_weight
         
         return losses
@@ -321,9 +312,9 @@ class TrajectoryLoss(nn.Module):
                 )
                 
                 # 类型代价（使用交叉熵）
-                type_cost = F.binary_cross_entropy_with_logits(
-                    pred_trajs[i, TrajParamIndex.CAR:TrajParamIndex.UNKNOWN+1],
-                    valid_gt_trajs[j, TrajParamIndex.CAR:TrajParamIndex.UNKNOWN+1],
+                cls_cost = F.binary_cross_entropy_with_logits(
+                    pred_trajs[i, TrajParamIndex.HAS_OBJECT:],
+                    valid_gt_trajs[j, TrajParamIndex.HAS_OBJECT:],
                     reduction='sum'
                 )
                 
@@ -331,7 +322,7 @@ class TrajectoryLoss(nn.Module):
                 cost = (
                     pos_cost * self.weight_dict['loss_pos'] +
                     dim_cost * self.weight_dict['loss_dim'] +
-                    type_cost * self.weight_dict['loss_type']
+                    cls_cost * self.weight_dict['loss_cls']
                 )
                 
                 cost_matrix[i, j] = cost

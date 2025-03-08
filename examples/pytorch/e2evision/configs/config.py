@@ -168,7 +168,8 @@ class LoggingConfig(ConfigBase):
         'v_num', 
         'train/loss_step', 
         'train/loss_epoch',
-        'train/layer_6_loss_exist_epoch',
+        'train/layer_6_loss_cls_epoch',
+        'train/layer_6_loss_pos_epoch',
         'val/loss',
         'epoch',
         'step'
@@ -177,8 +178,30 @@ class LoggingConfig(ConfigBase):
     use_optional_metrics: bool = True
     wandb_log_metrics: List[str] = field(default_factory=lambda: [
         'train/loss_epoch', 
-        'train/layer_6_loss_exist_epoch',
-        'val/loss'
+        'val/loss',
+        'train/layer_6_loss_pos_epoch',
+        'train/layer_6_loss_dim_epoch',
+        'train/layer_6_loss_vel_epoch',
+        'train/layer_6_loss_yaw_epoch',
+        'train/layer_6_loss_acc_epoch',
+        'train/layer_6_loss_cls_epoch',
+        'train/layer_6_fp_loss_exist_epoch',
+        'train/layer_5_loss_cls_epoch',
+        'train/layer_5_loss_pos_epoch',
+        'train/layer_5_loss_dim_epoch',
+        'train/layer_5_loss_vel_epoch',
+        'train/layer_5_loss_yaw_epoch',
+        'train/layer_5_loss_acc_epoch',
+        'train/layer_5_loss_cls_epoch',
+        'train/layer_5_fp_loss_exist_epoch',
+        'train/layer_4_loss_cls_epoch',
+        'train/layer_4_loss_pos_epoch',
+        'train/layer_4_loss_dim_epoch',
+        'train/layer_4_loss_vel_epoch',
+        'train/layer_4_loss_yaw_epoch',
+        'train/layer_4_loss_acc_epoch',
+        'train/layer_4_loss_cls_epoch',
+        'train/layer_4_fp_loss_exist_epoch'
     ])
     
 @dataclass
@@ -189,10 +212,9 @@ class LossConfig(ConfigBase):
         'loss_dim': 1.0,
         'loss_vel': 0.5,
         'loss_yaw': 0.5,
-        'loss_type': 1.0,
         'loss_acc': 0.1,
-        'loss_attr': 1.0,
-        'fp_loss_exist': 1.0
+        'loss_cls': 1.0,
+        'fp_loss_exist': 2.0
     })
     layer_loss_weights: List[float] = field(default_factory=lambda: [
         0.1, 0.3, 0.5, 0.7, 0.9, 1.0

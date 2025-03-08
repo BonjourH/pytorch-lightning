@@ -159,6 +159,20 @@ class Point3DAccMotion:
         return np.array([vx, vy, vz])
     
     @property
+    def to_dict(self) -> Dict:
+        return {
+            "x": self.x,
+            "y": self.y,
+            "z": self.z,
+            "vx": self.vx,
+            "vy": self.vy,
+            "vz": self.vz,
+            "ax": self.ax,
+            "ay": self.ay,
+            "az": self.az
+        }
+    
+    @property
     def position(self) -> np.ndarray:
         return np.array([self.x, self.y, self.z])
     
@@ -200,6 +214,19 @@ class ObstacleTrajectory:
     @property
     def dimensions(self) -> np.ndarray:
         return np.array([self.length, self.width, self.height])
+    
+    @property
+    def to_dict(self) -> Dict:
+        return {
+            "id": self.id,
+            "motion": self.motion.to_dict,
+            "yaw": self.yaw,
+            "length": self.length,
+            "width": self.width,
+            "height": self.height,
+            "object_type": self.object_type.name,
+            "static": self.static,
+        }
     
     def center(self, timestamp: float) -> np.ndarray:
         """Get center position at a given timestamp."""
@@ -282,6 +309,8 @@ def tensor_to_trajectory(traj_params: torch.Tensor, traj_id: int = 0, t0: float 
         ay=float(traj_params[TrajParamIndex.AY]),
         az=0.0   # Z acceleration not predicted
     )
+    
+    traj_params[TrajParamIndex.HAS_OBJECT:] = torch.sigmoid(traj_params[TrajParamIndex.HAS_OBJECT:])
     
     # Create ObstacleTrajectory object
     return ObstacleTrajectory(
