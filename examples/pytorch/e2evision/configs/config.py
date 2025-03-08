@@ -145,6 +145,10 @@ class InferenceConfig(ConfigBase):
     accelerator: str = 'gpu'
     devices: int = 1
     precision: str = '16-mixed'
+    output_dir: str = 'results'
+    seed: int = 42
+    checkpoint: str = 'checkpoints/last.ckpt'
+    limit_batch_size: int = 1
 
 
 @dataclass
@@ -206,7 +210,7 @@ class Config(ConfigBase):
     data: DataConfig = field(default_factory=DataConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
     training: TrainingConfig = field(default_factory=TrainingConfig)
-    inference: InferenceConfig = field(default_factory=InferenceConfig)
+    predict: InferenceConfig = field(default_factory=InferenceConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     loss: LossConfig = field(default_factory=LossConfig)
     
@@ -217,7 +221,7 @@ class Config(ConfigBase):
             data=DataConfig(**data.get('data', {})),
             model=ModelConfig(**data.get('model', {})),
             training=TrainingConfig(**data.get('training', {})),
-            inference=InferenceConfig(**data.get('inference', {})),
+            predict=InferenceConfig(**data.get('predict', {})),
             logging=LoggingConfig(**data.get('logging', {})),
             loss=LossConfig(**data.get('loss', {}))
         )

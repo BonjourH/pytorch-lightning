@@ -9,17 +9,15 @@ mkdir -p "${LOG_DIR}" "${RESULTS_DIR}" "${CHECKPOINT_DIR}"
 
 # 推理参数，可通过环境变量覆盖默认值
 # 注意：这些参数会覆盖配置文件中的参数
-TEST_LIST=${TEST_LIST:-"test_list.txt"}
+TEST_LIST=${TEST_LIST:-"val_clips.txt"}
 BATCH_SIZE=${BATCH_SIZE:-1}
-NUM_WORKERS=${NUM_WORKERS:-4}
+NUM_WORKERS=${NUM_WORKERS:-20}
 ACCELERATOR=${ACCELERATOR:-"gpu"}
 DEVICES=${DEVICES:-1}
 PRECISION=${PRECISION:-"16-mixed"}
-BACKBONE=${BACKBONE:-"resnet18"}
-NUM_QUERIES=${NUM_QUERIES:-16}
-SEQUENCE_LENGTH=${SEQUENCE_LENGTH:-10}
 CONFIDENCE_THRESHOLD=${CONFIDENCE_THRESHOLD:-0.5}
-CHECKPOINT=${CHECKPOINT:-"${CHECKPOINT_DIR}/model.ckpt"}  # 默认使用保存的最新模型
+CHECKPOINT=${CHECKPOINT:-"last.ckpt"}  # 默认使用保存的最新模型
+CONFIG_FILE=${CONFIG_FILE:-"configs/e2e_perception.yaml"}
 
 # 创建带时间戳的实验名称
 TIMESTAMP=$(date +%Y%m%d || echo "default")
@@ -53,9 +51,8 @@ LOG_FILE="${LOG_DIR}/${EXP_NAME}.log"
     echo "  Accelerator: ${ACCELERATOR}"
     echo "  Devices: ${DEVICES}"
     echo "  Precision: ${PRECISION}"
-    echo "  Backbone: ${BACKBONE}"
-    echo "  Num Queries: ${NUM_QUERIES}"
     echo "  Confidence Threshold: ${CONFIDENCE_THRESHOLD}"
+    echo "  Config File: ${CONFIG_FILE}"
 
     # 设置可见GPU
     export CUDA_VISIBLE_DEVICES=0
@@ -63,32 +60,30 @@ LOG_FILE="${LOG_DIR}/${EXP_NAME}.log"
     echo -e "\n======== Inference Start ========"
     
     # 构建推理命令
-    INFERENCE_CMD="python inference.py"
+    INFERENCE_CMD="python predict.py"
     
     # 添加基本参数
-    INFERENCE_CMD="${INFERENCE_CMD} --output-dir ${RESULTS_DIR}/${EXP_NAME}"
-    [ -n "${CHECKPOINT}" ] && INFERENCE_CMD="${INFERENCE_CMD} --checkpoint ${CHECKPOINT}"
-    [ -n "${TEST_LIST}" ] && INFERENCE_CMD="${INFERENCE_CMD} --test-list ${TEST_LIST}"
+    INFERENCE_CMD="${INFERENCE_CMD} --output_dir ${RESULTS_DIR}/${EXP_NAME}"
+    INFERENCE_CMD="${INFERENCE_CMD} --checkpoint ${CHECKPOINT_DIR}/${CHECKPOINT}"
+    INFERENCE_CMD="${INFERENCE_CMD} --test_list ${TEST_LIST}"
+    INFERENCE_CMD="${INFERENCE_CMD} --config_file ${CONFIG_FILE}"
     
-    # 可选指定自定义配置模块
-    # CONFIG_MODULE="configs.custom_config"
-    # [ -n "${CONFIG_MODULE}" ] && INFERENCE_CMD="${INFERENCE_CMD} --config-module ${CONFIG_MODULE}"
-    
-    # 使用config-override添加其他参数
+    # 创建配置覆盖数组
     CONFIG_OVERRIDES=()
-    [ -n "${SEQUENCE_LENGTH}" ] && CONFIG_OVERRIDES+=("inference.sequence_length=${SEQUENCE_LENGTH}")
-    [ -n "${BATCH_SIZE}" ] && CONFIG_OVERRIDES+=("inference.batch_size=${BATCH_SIZE}")
-    [ -n "${NUM_WORKERS}" ] && CONFIG_OVERRIDES+=("inference.num_workers=${NUM_WORKERS}")
-    [ -n "${CONFIDENCE_THRESHOLD}" ] && CONFIG_OVERRIDES+=("inference.confidence_threshold=${CONFIDENCE_THRESHOLD}")
-    [ -n "${ACCELERATOR}" ] && CONFIG_OVERRIDES+=("inference.accelerator=${ACCELERATOR}")
-    [ -n "${DEVICES}" ] && CONFIG_OVERRIDES+=("inference.devices=${DEVICES}")
-    [ -n "${PRECISION}" ] && CONFIG_OVERRIDES+=("inference.precision=${PRECISION}")
-    [ -n "${BACKBONE}" ] && CONFIG_OVERRIDES+=("model.backbone=${BACKBONE}")
-    [ -n "${NUM_QUERIES}" ] && CONFIG_OVERRIDES+=("model.num_queries=${NUM_QUERIES}")
+    
+    # 添加每个参数到覆盖数组
+    CONFIG_OVERRIDES+=("inference.batch_size=${BATCH_SIZE}")
+    CONFIG_OVERRIDES+=("inference.num_workers=${NUM_WORKERS}")
+    CONFIG_OVERRIDES+=("inference.accelerator=${ACCELERATOR}")
+    CONFIG_OVERRIDES+=("inference.devices=${DEVICES}")
+    CONFIG_OVERRIDES+=("inference.precision=${PRECISION}")
+    CONFIG_OVERRIDES+=("inference.confidence_threshold=${CONFIDENCE_THRESHOLD}")
+    CONFIG_OVERRIDES+=("inference.output_dir=${RESULTS_DIR}/${EXP_NAME}")
     
     # 添加配置覆盖参数
     if [ ${#CONFIG_OVERRIDES[@]} -gt 0 ]; then
-        INFERENCE_CMD="${INFERENCE_CMD} --config-override ${CONFIG_OVERRIDES[@]}"
+        OVERRIDE_STR=$(IFS=" " ; echo "${CONFIG_OVERRIDES[*]}")
+        INFERENCE_CMD="${INFERENCE_CMD} --config-override ${OVERRIDE_STR}"
     fi
     
     # 执行推理命令

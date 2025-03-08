@@ -22,8 +22,9 @@ class E2EPerceptionDataModule(L.LightningDataModule):
         # Initialize datasets to None
         self.train_dataset: Optional[MultiFrameDataset] = None
         self.val_dataset: Optional[MultiFrameDataset] = None
-        
-    def read_clip_list(self, list_file: str) -> List[str]:
+    
+    @classmethod
+    def read_clip_list(cls, list_file: str) -> List[str]:
         """Read clip paths from a txt file."""
         if not os.path.exists(list_file):
             raise FileNotFoundError(f"Clip list file not found: {list_file}")

@@ -14,7 +14,7 @@ class E2EPerceptionModule(L.LightningModule):
     
     def __init__(self, config: Config):
         super().__init__()
-        # self.save_hyperparameters()
+        self.save_hyperparameters(ignore=['config'])
         self.config = config
         # Create network
         self.net = E2EPerceptionNet(config.model, config.data, config.training.use_checkpoint)
@@ -25,8 +25,37 @@ class E2EPerceptionModule(L.LightningModule):
         # Initialize validation metrics
         self.val_step_outputs = []
         
+        # Initialize predict metrics
+        self.predict_step_outputs = []
+        
     def forward(self, batch: Dict) -> List[Dict]:
         return self.net(batch)
+    
+    def configure_optimizers(self):
+        """Configure optimizers and learning rate schedulers."""
+        # Create optimizer
+        optimizer = Adam(
+            self.parameters(),
+            lr=self.config.training.learning_rate,
+            weight_decay=self.config.training.weight_decay
+        )
+        
+        # Create scheduler
+        scheduler = CosineAnnealingLR(
+            optimizer,
+            T_max=self.config.training.max_epochs,
+            eta_min=1e-6
+        )
+        
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "monitor": "val/loss",
+                "interval": "epoch",
+                "frequency": 1
+            }
+        }
     
     def training_step(self, batch: Dict, batch_idx: int) -> Dict:
         """Training step."""
@@ -86,8 +115,8 @@ class E2EPerceptionModule(L.LightningModule):
             print(f"  Targets shape: {gt_trajs.shape}")
             
             # Filter valid predictions and targets
-            valid_mask_preds = pred_trajs[..., 11] > 0.5  # HAS_OBJECT flag
-            valid_mask_targets = gt_trajs[..., 11] > 0.5
+            valid_mask_preds = pred_trajs[..., TrajectoryLoss.HAS_OBJECT_FLAG] > 0.5  # HAS_OBJECT flag
+            valid_mask_targets = gt_trajs[..., TrajectoryLoss.HAS_OBJECT_FLAG] > 0.5
             
             print(f"  Valid predictions: {valid_mask_preds.sum().item()}")
             print(f"  Valid targets: {valid_mask_targets.sum().item()}")
@@ -118,34 +147,13 @@ class E2EPerceptionModule(L.LightningModule):
     def predict_step(self, batch: Dict, batch_idx: int, dataloader_idx: int = 0) -> Dict:
         """Prediction step."""
         outputs = self(batch)
-        return outputs[-1]  # Return final predictions
+        self.predict_step_outputs.append(outputs)
+        return outputs
     
-    def configure_optimizers(self):
-        """Configure optimizers and learning rate schedulers."""
-        # Create optimizer
-        optimizer = Adam(
-            self.parameters(),
-            lr=self.config.training.learning_rate,
-            weight_decay=self.config.training.weight_decay
-        )
+    def on_predict_epoch_end(self):
+        """On predict epoch end."""
+        print("On predict epoch end")
         
-        # Create scheduler
-        scheduler = CosineAnnealingLR(
-            optimizer,
-            T_max=self.config.training.max_epochs,
-            eta_min=1e-6
-        )
-        
-        return {
-            "optimizer": optimizer,
-            "lr_scheduler": {
-                "scheduler": scheduler,
-                "monitor": "val/loss",
-                "interval": "epoch",
-                "frequency": 1
-            }
-        }
-    
     def _compute_metrics(self, predictions: List[torch.Tensor], targets: List[torch.Tensor]) -> Dict:
         """Compute evaluation metrics."""
         metrics = {}
