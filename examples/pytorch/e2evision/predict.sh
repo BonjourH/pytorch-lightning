@@ -16,7 +16,7 @@ PRECISION=${PRECISION:-"16-mixed"}
 CONFIDENCE_THRESHOLD=${CONFIDENCE_THRESHOLD:-0.5}
 CHECKPOINT=${CHECKPOINT:-"last.ckpt"}  # 默认使用保存的最新模型
 CONFIG_FILE=${CONFIG_FILE:-"configs/e2e_perception.yaml"}
-NUM_QUERIES=${NUM_QUERIES:-64}
+NUM_QUERIES=${NUM_QUERIES:-16}
 
 # 创建带时间戳的实验名称
 TIMESTAMP=$(date +%Y%m%d || echo "default")
@@ -63,7 +63,7 @@ LOG_FILE="${RESULTS_DIR}/${EXP_NAME}.log"
     
     # 添加基本参数
     INFERENCE_CMD="${INFERENCE_CMD} --output_dir ${RESULTS_DIR}/${EXP_NAME}"
-    INFERENCE_CMD="${INFERENCE_CMD} --checkpoint checkpoints/last.ckpt"
+    INFERENCE_CMD="${INFERENCE_CMD} --checkpoint ./last.ckpt"
     INFERENCE_CMD="${INFERENCE_CMD} --test_list ${TEST_LIST}"
     INFERENCE_CMD="${INFERENCE_CMD} --config_file ${CONFIG_FILE}"
     

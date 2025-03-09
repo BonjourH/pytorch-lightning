@@ -101,7 +101,7 @@ class DataConfig(ConfigBase):
 @dataclass
 class DecoderConfig(ConfigBase):
     """Decoder configuration"""
-    num_layers: int = 6
+    num_layers: int = 5
     num_queries: int = 128
     feature_dim: int = 256
     hidden_dim: int = 512

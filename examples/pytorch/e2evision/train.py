@@ -85,7 +85,7 @@ class CheckpointCopyCallback(Callback):
         if os.path.exists(last_ckpt_src):
             print(f"Epoch {trainer.current_epoch}: Copying last checkpoint to {last_ckpt_dst}")
             shutil.copy2(last_ckpt_src, last_ckpt_dst)
-            os.remove(last_ckpt_src)
+            # os.remove(last_ckpt_src)
             print(f"Checkpoint copied successfully")
         else:
             print(f"Warning: Last checkpoint not found at {last_ckpt_src} after waiting")

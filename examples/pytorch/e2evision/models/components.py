@@ -185,7 +185,6 @@ class TrajectoryDecoder(nn.Module):
             List of trajectory parameter tensors [B, num_queries, TrajParamIndex.END_OF_INDEX]
         """
         B = next(iter(features_dict.values())).shape[0]
-        
         # Create initial object queries
         queries = self.queries.unsqueeze(0).repeat(B, 1, 1)  # [B, num_queries, C]
         pos = self.query_pos.unsqueeze(0).repeat(B, 1, 1)    # [B, num_queries, C]
@@ -204,12 +203,12 @@ class TrajectoryDecoder(nn.Module):
             box_points = self.sample_box_points(traj_params)  # [B, N, num_points, 3]
             
             # 3. Gather features from all views and frames
-            point_features = self.gather_point_features(
+            point_features, validity_mask = self.gather_point_features(
                 box_points, traj_params, features_dict, calibrations, ego_states
-            )  # [B, N, num_points, T, num_cameras, C]
+            )  # [B, N, num_points, T, num_cameras, C], [B, N, num_points, T, num_cameras, 1]
             
             # 4. Aggregate features
-            agg_features = self.aggregate_features(point_features)  # [B, N, hidden_dim]
+            agg_features = self.aggregate_features((point_features, validity_mask))  # [B, N, hidden_dim]
             
             # 5. Update queries
             queries = layer(queries, agg_features)
@@ -321,7 +320,7 @@ class TrajectoryDecoder(nn.Module):
                             traj_params: torch.Tensor,
                             features_dict: Dict[SourceCameraId, torch.Tensor],
                             calibrations: Dict[SourceCameraId, torch.Tensor],
-                            ego_states: torch.Tensor) -> torch.Tensor:
+                            ego_states: torch.Tensor) -> tuple:
         """Gather features for box points from all cameras and frames.
         
         Args:
@@ -332,7 +331,9 @@ class TrajectoryDecoder(nn.Module):
             ego_states: Tensor[B, T, EgoStateIndex.END_OF_INDEX]
             
         Returns:
-            Tensor[B, N, num_points, T, num_cameras, C]
+            Tuple of:
+                Tensor[B, N, num_points, T, num_cameras, C] - Features
+                Tensor[B, N, num_points, T, num_cameras, 1] - Validity mask (1=valid, 0=invalid)
         """
         B, N, P = box_points.shape[:3]
         T = ego_states.shape[1]
@@ -341,6 +342,8 @@ class TrajectoryDecoder(nn.Module):
         # Initialize output tensor to store all features
         C = next(iter(features_dict.values())).shape[1]
         all_point_features = torch.zeros(B, N, P, T, num_cameras, C).to(box_points.device)
+        # 创建特征有效性掩码，1表示有效，0表示无效
+        validity_mask = torch.zeros(B, N, P, T, num_cameras, 1).to(box_points.device)
         
         # For each time step, transform points to global frame, then project to cameras
         for t in range(T):
@@ -388,13 +391,16 @@ class TrajectoryDecoder(nn.Module):
                 # Reshape back
                 point_features = sampled.permute(0, 2, 3, 1).view(B, N, P, C)
                 
-                # Set features for invisible points to zero
+                # 记录有效特征
+                validity_mask[:, :, :, t, cam_idx, 0] = visible.float()
+                
+                # 将无效特征设为0，保留原始实现
                 point_features = point_features * visible.unsqueeze(-1).float()
                 
                 # Store in output tensor
                 all_point_features[:, :, :, t, cam_idx] = point_features
         
-        return all_point_features
+        return all_point_features, validity_mask
         
     def transform_points_at_time(self, 
                                box_points: torch.Tensor, 
@@ -503,22 +509,49 @@ class TrajectoryDecoder(nn.Module):
         
         return transformed
     
-    def aggregate_features(self, point_features: torch.Tensor) -> torch.Tensor:
+    def aggregate_features(self, point_features_with_mask: tuple) -> torch.Tensor:
         """Aggregate features from all points, frames and cameras.
         
         Args:
-            point_features: Tensor[B, N, P, T, num_cameras, C]
+            point_features_with_mask: Tuple containing:
+                - point_features: Tensor[B, N, P, T, num_cameras, C]
+                - validity_mask: Tensor[B, N, P, T, num_cameras, 1]
             
         Returns:
             Tensor[B, N, hidden_dim]
         """
+        point_features, validity_mask = point_features_with_mask
         B, N = point_features.shape[:2]
+        C = point_features.shape[-1]  # 获取特征通道数
         
         # Reshape for processing
         features_flat = point_features.flatten(2, 4)  # [B, N, P*T*num_cameras, C]
+        mask_flat = validity_mask.flatten(2, 4)  # [B, N, P*T*num_cameras, 1]
+        
+        # 使用掩码处理特征聚合
+        # 将无效特征替换为非常小的负值，确保在max操作中不会被选中
+        # masked_value应该小于模型可能产生的任何有效特征值
+        masked_value = -1e9  # 一个足够小的值
+        masked_features = torch.where(
+            mask_flat > 0.5,
+            features_flat,
+            torch.full_like(features_flat, masked_value)
+        )
         
         # Max pooling over all points, frames and cameras
-        pooled_features, _ = torch.max(features_flat, dim=2)  # [B, N, C]
+        pooled_features, _ = torch.max(masked_features, dim=2)  # [B, N, C]
+        
+        # 检查每个通道是否至少有一个有效值
+        # 使用正确的维度进行广播
+        # 首先沿着特征维度对掩码求和，获得每个位置是否有任何有效的点
+        has_valid_point = (mask_flat.sum(dim=2) > 0)  # [B, N, 1]
+        
+        # 使用 torch.where 代替乘法和加法操作，避免广播问题
+        pooled_features = torch.where(
+            has_valid_point,  # [B, N, 1]
+            pooled_features,  # [B, N, C]
+            torch.zeros_like(pooled_features)  # [B, N, C]
+        )
         
         # Process through MLP
         processed_features = self.feature_mlp(pooled_features)  # [B, N, hidden_dim]
