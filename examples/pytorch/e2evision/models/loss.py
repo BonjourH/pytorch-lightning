@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
@@ -81,6 +81,194 @@ def match_trajectories(
     
     return matches, unmatched_pred_indices, cost_matrix
 
+
+class QueryPredictionLoss(nn.Module):
+    """Loss function for query prediction."""
+    
+    def __init__(self, config: LossConfig):
+        super().__init__()
+        
+        self.config = config
+        self.weight_dict = config.weight_dict
+        
+        # register coordinate weights, they are fixed for all samples
+        self.register_buffer('coord_weights', torch.tensor([1.0, 2.0, 1.0], dtype=torch.float32))
+        self.register_buffer('dim_weights', torch.tensor([1.0, 1.0, 1.0], dtype=torch.float32))
+        self.register_buffer('vel_weights', torch.tensor([1.0, 2.0], dtype=torch.float32))
+        self.register_buffer('acc_weights', torch.tensor([1.0, 2.0], dtype=torch.float32))
+        
+    @staticmethod
+    def independent_l1_loss(pred_matched: torch.Tensor, gt_matched: torch.Tensor,
+                            coord_weights: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """
+        计算逐样本的加权 L1 损失，确保不同 query 的梯度独立
+        
+        Args:
+            pred_matched:  匹配的预测值 [M, D]
+            gt_matched:    匹配的真实值 [M, D]
+            coord_weights: 各坐标的权重 [D], 如 [1.0, 0.5, 0.5]
+        
+        Returns:
+            loss: 标量损失值
+        """
+        # 计算逐元素绝对误差
+        abs_error = torch.abs(pred_matched - gt_matched)  # [M, D]
+        
+        # 应用坐标权重（可选）
+        if coord_weights is not None:
+            abs_error = abs_error * coord_weights  # [M, D]
+        
+        # 逐样本求和（保持样本独立性）
+        per_sample_loss = abs_error.sum(dim=1)  # [M]
+        
+        # 返回均值损失
+        return per_sample_loss.mean()
+    
+    @staticmethod
+    def independent_l2_loss(pred_matched: torch.Tensor, gt_matched: torch.Tensor,
+                            coord_weights: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """
+        计算逐样本的加权 L2 损失，确保不同 query 的梯度独立
+        
+        Args:
+            pred_matched:  匹配的预测值 [M, D]
+            gt_matched:    匹配的真实值 [M, D]
+            coord_weights: 各坐标的权重 [D], 如 [1.0, 0.5, 0.5]
+        
+        Returns:
+            loss: 标量损失值
+        """
+        # 计算平方误差
+        squared_error = (pred_matched - gt_matched) ** 2  # [M, D]
+        
+        # 应用坐标权重（可选）
+        if coord_weights is not None:
+            squared_error = squared_error * coord_weights  # [M, D]
+        
+        # 逐样本求和（保持样本独立性）
+        per_sample_loss = squared_error.sum(dim=1)  # [M]
+        
+        # 返回均值损失
+        return per_sample_loss.mean()
+    
+    @staticmethod
+    def independent_huber_loss(pred_matched: torch.Tensor, 
+                                gt_matched: torch.Tensor,
+                                delta: float = 1.0,
+                                coord_weights: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """
+        独立计算每个样本的加权 Huber Loss, 避免不同 query 之间的梯度干扰
+        
+        Args:
+            pred_matched:   匹配的预测值 [M, D]
+            gt_matched:     匹配的真实值 [M, D]
+            delta:          Huber Loss 阈值参数
+            coord_weights:  各坐标的权重 [D], 例如 [1.0, 0.5, 0.5]
+        
+        Returns:
+            loss: 标量损失值
+        """
+        # 计算逐元素误差
+        error = pred_matched - gt_matched
+        abs_error = torch.abs(error)
+        
+        # 计算 Huber Loss 的两种情形
+        quadratic_mask = (abs_error <= delta)  # 应用 L2 的区域
+        linear_mask = ~quadratic_mask          # 应用 L1 的区域
+        
+        # 逐元素计算基础损失
+        loss_elements = torch.where(
+            quadratic_mask,
+            0.5 * error**2,                   # L2 部分
+            delta * (abs_error - 0.5 * delta)  # L1 部分
+        )
+        
+        # 应用坐标权重（可选）
+        if coord_weights is not None:
+            loss_elements = loss_elements * coord_weights
+        
+        # 逐样本求和（保持样本独立性）
+        per_sample_loss = loss_elements.sum(dim=1)  # [M]
+        
+        # 返回均值损失
+        return per_sample_loss.mean()
+
+
+    def _calculate_pos_loss(self, predicts: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """Calculate position loss."""
+        return self.independent_huber_loss(
+            predicts[:, TrajParamIndex.X:TrajParamIndex.Z+1],
+            targets[:, TrajParamIndex.X:TrajParamIndex.Z+1],
+            1.0,
+            self.coord_weights
+        )
+    
+    def _calculate_dim_loss(self, predicts: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """Calculate dimension loss."""
+        return self.independent_huber_loss(
+            predicts[:, TrajParamIndex.LENGTH:TrajParamIndex.HEIGHT+1],
+            targets[:, TrajParamIndex.LENGTH:TrajParamIndex.HEIGHT+1],
+            1.0,
+            self.dim_weights
+        )
+    
+    def _calculate_vel_loss(self, predicts: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """Calculate velocity loss."""
+        return self.independent_huber_loss(
+            predicts[:, TrajParamIndex.VX:TrajParamIndex.VY+1],
+            targets[:, TrajParamIndex.VX:TrajParamIndex.VY+1],
+            1.0,
+            self.vel_weights
+        )
+    
+    def _calculate_acc_loss(self, predicts: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """Calculate acceleration loss."""
+        return self.independent_huber_loss(
+            predicts[:, TrajParamIndex.AX:TrajParamIndex.AY+1],
+            targets[:, TrajParamIndex.AX:TrajParamIndex.AY+1],
+            1.0,
+            self.acc_weights
+        )
+    
+    def _calculate_yaw_loss(self, predicts: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """Calculate yaw loss."""
+        return self.independent_l1_loss(
+            predicts[:, TrajParamIndex.YAW:TrajParamIndex.YAW+1],
+            targets[:, TrajParamIndex.YAW:TrajParamIndex.YAW+1]
+        )
+    
+    def _calculate_cls_loss(self, predicts: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """Calculate classification loss."""
+        cls_loss = F.binary_cross_entropy_with_logits(
+            predicts[:, TrajParamIndex.HAS_OBJECT:],
+            targets[:, TrajParamIndex.HAS_OBJECT:]
+        )
+        return cls_loss
+    
+    def _calculate_fp_loss(self, predicts: torch.Tensor) -> torch.Tensor:
+        """Calculate FP loss."""
+        fp_loss = F.binary_cross_entropy_with_logits(
+            predicts[:, TrajParamIndex.HAS_OBJECT],
+            torch.zeros_like(predicts[:, TrajParamIndex.HAS_OBJECT]),
+        )
+        return fp_loss
+    def forward(self, predicts: torch.Tensor, targets: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """
+        Forward pass to compute losses.
+        
+        Args:
+            predicts: Predicted trajectories [N, TrajParamIndex.END_OF_INDEX]
+            targets: Ground truth trajectories [N, TrajParamIndex.END_OF_INDEX] or None
+            
+        """
+        # FP loss
+        if targets is None:
+            return self._calculate_fp_loss(predicts)
+        
+        # 计算位置损失
+        pos_loss = self._calculate_pos_loss(predicts, targets)
+        
+
 class TrajectoryLoss(nn.Module):
     """Loss function for trajectory prediction."""
     
@@ -114,6 +302,7 @@ class TrajectoryLoss(nn.Module):
             
             # 使用匈牙利算法进行匹配
             indices = linear_sum_assignment(cost_matrix.detach().cpu().numpy())
+            
             indices_list.append(indices)
         
         # 使用相同的匹配结果计算每一层的损失
@@ -156,6 +345,10 @@ class TrajectoryLoss(nn.Module):
         for b in range(batch_size):
             pred_idx, gt_idx = indices_list[b]
             
+            if len(pred_idx) == 0:
+                # TODO: penalize the FP prediction
+                continue
+            
             # 计算当前批次中正样本和负样本的比例
             num_positive = len(pred_idx)
             num_queries = pred_trajs.shape[1]
@@ -172,10 +365,13 @@ class TrajectoryLoss(nn.Module):
             
             # 计算各项损失
             # 位置损失 (x, y, z) - 使用L1损失
-            pos_loss += F.l1_loss(
-                pred_matched[:, TrajParamIndex.X:TrajParamIndex.Z+1],
-                gt_matched[:, TrajParamIndex.X:TrajParamIndex.Z+1]
-            )
+            # pos_loss += F.l1_loss(
+            #     pred_matched[:, TrajParamIndex.X:TrajParamIndex.Z+1],
+            #     gt_matched[:, TrajParamIndex.X:TrajParamIndex.Z+1]
+            # )
+            pos_loss += QueryPredictionLoss.independent_huber_loss(pred_matched[:, TrajParamIndex.X:TrajParamIndex.Z+1], 
+                                                                   gt_matched[:, TrajParamIndex.X:TrajParamIndex.Z+1], 
+                                                                   1.0)
             
             # 尺寸损失 (length, width, height) - 使用L1损失
             dim_loss += F.l1_loss(
@@ -255,7 +451,7 @@ class TrajectoryLoss(nn.Module):
             fp_loss_exist = torch.tensor(0.0001, device=pred_trajs.device)
         
         # 获取层索引并应用层权重
-        layer_idx = int(prefix.split('_')[1]) - 4  # 从layer_4开始，所以减4
+        layer_idx = int(prefix.split('_')[1])
         layer_weight = self.config.layer_loss_weights[layer_idx] if layer_idx < len(self.config.layer_loss_weights) else 1.0
         
         # 添加到损失字典，应用权重和层权重
