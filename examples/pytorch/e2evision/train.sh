@@ -27,6 +27,7 @@ VALIDATE_ONLY=${VALIDATE_ONLY:-0}  # 0: train and validate, 1: validate only
 LIMIT_VAL_BATCHES=${LIMIT_VAL_BATCHES:-1}  # 1.0: validate all batches, 0.1: validate 10% of batches, 1: one batch
 GRADIENT_CLIP_VAL=${GRADIENT_CLIP_VAL:-1.0}  # 添加梯度裁剪值
 MEMORY_EFFICIENT=${MEMORY_EFFICIENT:-1}  # 添加内存效率选项
+CLEAN_WANDB_HISTORY=${CLEAN_WANDB_HISTORY:-1}  # 是否清理 W&B 历史数据，1: 清理, 0: 不清理
 # Create log directory
 LOG_DIR="logs/${EXP_NAME}"
 CHECKPOINT_DIR="checkpoints/${EXP_NAME}"
@@ -120,6 +121,7 @@ LOG_FILE="${LOG_DIR}/${EXP_NAME}.log"
     CONFIG_OVERRIDES+=("logging.use_wandb=true")
     CONFIG_OVERRIDES+=("logging.wandb_project=e2e_perception")
     CONFIG_OVERRIDES+=("logging.use_optional_metrics=false")
+    CONFIG_OVERRIDES+=("logging.clean_wandb_history=${CLEAN_WANDB_HISTORY}")
     
     # Add config override parameters
     if [ ${#CONFIG_OVERRIDES[@]} -gt 0 ]; then

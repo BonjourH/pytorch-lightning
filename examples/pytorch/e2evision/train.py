@@ -11,6 +11,7 @@ import warnings
 import sys
 import time
 import shutil
+import wandb  # 添加 wandb 导入
 
 from base import SourceCameraId
 from models.module import E2EPerceptionModule
@@ -89,6 +90,22 @@ class CheckpointCopyCallback(Callback):
         else:
             print(f"Warning: Last checkpoint not found at {last_ckpt_src} after waiting")
 
+def clean_wandb_history(project_name):
+    """清理 W&B 上该项目的所有历史运行数据"""
+    try:
+        api = wandb.Api()
+        runs = api.runs(project_name)
+        
+        print(f"正在清理 {project_name} 项目的历史数据...")
+        for run in runs:
+            print(f"删除运行: {run.name} (ID: {run.id})")
+            run.delete()
+        
+        print(f"成功清理了 {len(runs)} 个历史运行")
+    except Exception as e:
+        print(f"清理 W&B 历史数据时出错: {e}")
+        print("继续训练，但不清理历史数据")
+
 def parse_args():
     parser = argparse.ArgumentParser(description='Train E2E perception model')
     
@@ -111,6 +128,11 @@ def main():
     args = parse_args()
     
     config = get_config(args)
+    
+    # 如果配置为清理 W&B 历史数据且启用了 W&B
+    if config.logging.use_wandb and config.logging.clean_wandb_history:
+        clean_wandb_history(config.logging.wandb_project)
+    
     # Set random seed
     L.seed_everything(config.training.seed, workers=True)
     

@@ -164,6 +164,7 @@ class LoggingConfig(ConfigBase):
     use_wandb: bool = True
     wandb_project: str = 'e2e_perception'
     run_id: Optional[int] = 0
+    clean_wandb_history: bool = True  # 是否清理 W&B 上的历史数据（只保留当前训练）
     # Progress bar options
     progress_bar_metrics: List[str] = field(default_factory=lambda: [
         'v_num', 
