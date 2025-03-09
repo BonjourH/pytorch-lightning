@@ -122,6 +122,7 @@ class TrajectoryDecoder(nn.Module):
         
         # Sample points on unit cube for feature gathering
         self.register_buffer('unit_points', self._generate_unit_cube_points(num_points))
+        self.register_buffer('origin_point', torch.zeros(1, 3))
         
         # Parameter ranges for normalization: torch.Tensor[TrajParamIndex.HEIGHT + 1, 2]
         ranges = self._get_motion_param_range()
@@ -269,7 +270,7 @@ class TrajectoryDecoder(nn.Module):
         param_range = torch.zeros(TrajParamIndex.HEIGHT + 1, 2)
         
         # Position ranges (in meters)
-        param_range[TrajParamIndex.X] = torch.tensor([-80.0, 160.0])
+        param_range[TrajParamIndex.X] = torch.tensor([-80.0, 250.0])
         param_range[TrajParamIndex.Y] = torch.tensor([-10.0, 10.0])
         param_range[TrajParamIndex.Z] = torch.tensor([-3.0, 5.0])
         
@@ -313,7 +314,10 @@ class TrajectoryDecoder(nn.Module):
          
         # Scale unit cube points by dimensions and ensure same device
         box_points = self.unit_points.unsqueeze(0).unsqueeze(0) * dims  # [B, N, num_points, 3]
-        return box_points
+        # return box_points
+        origin_point = self.origin_point.unsqueeze(0).unsqueeze(0).repeat(traj_params.shape[0], traj_params.shape[1], 1, 1)
+        results = torch.cat([origin_point, box_points], dim=-2)
+        return results
     
     def gather_point_features(self, 
                             box_points: torch.Tensor, 
@@ -348,7 +352,8 @@ class TrajectoryDecoder(nn.Module):
         # For each time step, transform points to global frame, then project to cameras
         for t in range(T):
             # 1. Calculate object positions at time t
-            dt = ego_states[:, t, EgoStateIndex.TIMESTAMP] - ego_states[:, -1, EgoStateIndex.TIMESTAMP]  # Time diff from reference frame
+            # 确保时间戳计算使用高精度，避免小数点后的精度丢失
+            dt = (ego_states[:, t, EgoStateIndex.TIMESTAMP] - ego_states[:, -1, EgoStateIndex.TIMESTAMP]).to(torch.float64)  # Time diff from reference frame
             dt = dt.unsqueeze(-1).unsqueeze(-1)  # [B, 1, 1]
             
             # Calculate positions of points at time t
@@ -381,8 +386,9 @@ class TrajectoryDecoder(nn.Module):
                 
                 # Reshape for grid_sample
                 grid = norm_points.view(B, N * P, 1, 2)
-                
+                grid = grid.to(dtype=features.dtype) # float64 → float32
                 # Sample features
+                # features: [B, C, H, W], grid: [B, N*P, 1, 2]
                 sampled = F.grid_sample(
                     features, grid, mode='bilinear', 
                     padding_mode='zeros', align_corners=True
@@ -487,28 +493,27 @@ class TrajectoryDecoder(nn.Module):
         B, N, P = points.shape[:3]
         
         # Extract ego position and yaw
-        ego_pos = ego_state[..., :3].unsqueeze(1).unsqueeze(2)  # [B, 1, 1, 3]
-        ego_yaw = ego_state[..., 3].unsqueeze(1).unsqueeze(2)  # [B, 1, 1]
+        ego_yaw = ego_state[..., EgoStateIndex.YAW].unsqueeze(1).unsqueeze(2)  # [B, 1, 1]
         
         # Create rotation matrix
         cos_yaw = torch.cos(ego_yaw)
         sin_yaw = torch.sin(ego_yaw)
         
-        # Apply inverse transform (ego->world to world->ego)
-        # First translate
-        translated = points - ego_pos
+        x_rotated = points[..., 0] * cos_yaw - points[..., 1] * sin_yaw # [B, N, 1]
+        y_rotated = points[..., 0] * sin_yaw + points[..., 1] * cos_yaw # [B, N, 1]
         
-        # Then rotate (inverse rotation)
-        x_rotated = translated[..., 0] * cos_yaw + translated[..., 1] * sin_yaw
-        y_rotated = -translated[..., 0] * sin_yaw + translated[..., 1] * cos_yaw
+        ego_x = ego_state[..., EgoStateIndex.X].unsqueeze(1).unsqueeze(2) # [B, 1, 1]
+        ego_y = ego_state[..., EgoStateIndex.Y].unsqueeze(1).unsqueeze(2) # [B, 1, 1]
         
-        transformed = torch.stack(
-            [x_rotated, y_rotated, translated[..., 2]], 
+        x_rotated += ego_x
+        y_rotated += ego_y
+        
+        results = torch.stack(
+            [x_rotated, y_rotated, points[..., 2]], 
             dim=-1
         )
         
-        return transformed
-    
+        return results
     def aggregate_features(self, point_features_with_mask: tuple) -> torch.Tensor:
         """Aggregate features from all points, frames and cameras.
         
@@ -621,7 +626,6 @@ class TrajectoryDecoder(nn.Module):
         x = points_flat[..., 0].unsqueeze(-1)  # [B, N*P, 1]
         y = points_flat[..., 1].unsqueeze(-1)  # [B, N*P, 1]
         z = points_flat[..., 2].unsqueeze(-1)  # [B, N*P, 1]
-        
         # Transform points from ego to camera coordinates
         x_cam = r00 * x + r01 * y + r02 * z + tx
         y_cam = r10 * x + r11 * y + r12 * z + ty
@@ -710,7 +714,7 @@ class TrajectoryDecoder(nn.Module):
                 x_distorted = x_normalized
                 y_distorted = y_normalized
         else:
-            # Handle mixed camera types in batch (less efficient)
+            # Handle mixed camera types in batch (less efficient), should not happen
             x_distorted = torch.zeros_like(x_normalized)
             y_distorted = torch.zeros_like(y_normalized)
             

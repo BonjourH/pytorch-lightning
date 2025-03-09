@@ -13,3 +13,4 @@ tensorboard
 weave
 easydict
 timm
+GPUtil

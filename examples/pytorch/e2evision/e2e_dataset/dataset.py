@@ -96,6 +96,7 @@ class MultiFrameDataset(Dataset):
                         raise ValueError(f"Unsupported camera type: {camera_type}")
 
                     # Set extrinsic parameters
+                    # from ego frame to camera frame
                     camera_params[CameraParamIndex.X] = calib_data['extrinsic']['tx']
                     camera_params[CameraParamIndex.Y] = calib_data['extrinsic']['ty']
                     camera_params[CameraParamIndex.Z] = calib_data['extrinsic']['tz']
@@ -123,6 +124,12 @@ class MultiFrameDataset(Dataset):
             for start_idx in range(valid_sample_num):
                 sample = TrainingSample(calibrations)
                 
+                # Get state for the last frame
+                last_ego_state = ego_states[start_idx + self.config.sequence_length - 1]
+                x_ref, y_ref = last_ego_state['x'], last_ego_state['y']
+                qw, qx, qy, qz = last_ego_state['qw'], last_ego_state['qx'], last_ego_state['qy'], last_ego_state['qz']
+                yaw_ref = np.arctan2(2 * (qw * qz + qx * qy), 1 - 2 * (qy * qy + qz * qz))
+                
                 # Add frames to sample
                 for i in range(start_idx, start_idx + self.config.sequence_length):
                     timestamp = "{:.6f}".format(ego_states[i]['timestamp'])
@@ -135,17 +142,36 @@ class MultiFrameDataset(Dataset):
                         img_paths[camera_id] = img_path
                     
                     # Collect Ego State
-                    ego_state = torch.zeros(EgoStateIndex.END_OF_INDEX)
-                    ego_state[EgoStateIndex.TIMESTAMP] = ego_states[i].get('timestamp', 0.0)
-                    ego_state[EgoStateIndex.X] = ego_states[i].get('x', 0.0)
-                    ego_state[EgoStateIndex.Y] = ego_states[i].get('y', 0.0)
-                    ego_state[EgoStateIndex.YAW] = ego_states[i].get('yaw', 0.0)
-                    ego_state[EgoStateIndex.PITCH_CORRECTION] = ego_states[i].get('pitch_correction', 0.0)
-                    ego_state[EgoStateIndex.VX] = ego_states[i].get('vx', 0.0)
-                    ego_state[EgoStateIndex.VY] = ego_states[i].get('vy', 0.0)
-                    ego_state[EgoStateIndex.AX] = ego_states[i].get('ax', 0.0)
-                    ego_state[EgoStateIndex.AY] = ego_states[i].get('ay', 0.0)
-                    ego_state[EgoStateIndex.YAW_RATE] = ego_states[i].get('yaw_rate', 0.0)
+                    ego_state = torch.zeros(EgoStateIndex.END_OF_INDEX, dtype=torch.float64)  # 使用 float64 保证精度
+                    # 确保时间戳保留小数精度
+                    timestamp_float = float(ego_states[i]['timestamp'])
+                    ego_state[EgoStateIndex.TIMESTAMP] = timestamp_float
+                    qw, qx, qy, qz = ego_states[i]['qw'], ego_states[i]['qx'], ego_states[i]['qy'], ego_states[i]['qz']
+                    yaw = np.arctan2(2 * (qw * qz + qx * qy), 1 - 2 * (qy * qy + qz * qz))
+                    ego_state[EgoStateIndex.YAW] = yaw_ref - yaw
+                    
+                    x_diff = x_ref - ego_states[i]['x']
+                    y_diff = y_ref - ego_states[i]['y']
+                    cos_val, sin_val = np.cos(yaw), np.sin(yaw)
+                    ego_state[EgoStateIndex.X] = x_diff * cos_val + y_diff * sin_val
+                    ego_state[EgoStateIndex.Y] = -x_diff * sin_val + y_diff * cos_val
+                    
+                    # NOTE: the origin ego state is in first ego frame, but here we want to change the 
+                    # relative ego state to the last ego frame. The question is: we have (x1, y1, yaw1) in ego1 frame1,
+                    # and (x2, y2, yaw2) in ego2 frame2, how to convert (x1, y1, yaw1) to ego2 frame?
+                    # the answer is:
+                    # frame1 to global frame is (R1, t1), frame2 to global frame is (R2, t2),
+                    # global frame to frame2 is (R2^T, -R2^T * t2),
+                    # then frame1 to frame2 is (R2^T * R1, R2^T * (t1 - t2)) => (yaw1 - yaw2, xx, xx)
+                    # here frame1 is the last ego frame, frame2 is the current ego frame we set the variable
+                    
+                    ego_state[EgoStateIndex.PITCH_CORRECTION] = ego_states[i].get('pitch', 0.0)
+                    # ego_state[EgoStateIndex.VX] = ego_states[i].get('speed', 0.0)
+                    # ego_state[EgoStateIndex.VY] = ego_states[i].get('vy', 0.0)
+                    # ego_state[EgoStateIndex.AX] = ego_states[i].get('acceleration', 0.0)
+                    # ego_state[EgoStateIndex.AY] = ego_states[i].get('ay', 0.0)
+                    # ego_state[EgoStateIndex.YAW_RATE] = ego_states[i].get('yaw_rate', 0.0)
+                    
                     sample.add_frame(img_paths, ego_state)
                     
                     # Add trajectory if it's the last frame
