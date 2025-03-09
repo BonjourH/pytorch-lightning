@@ -208,7 +208,11 @@ def main():
         gradient_clip_val=config.training.gradient_clip_val,
         accumulate_grad_batches=config.training.accumulate_grad_batches,
         deterministic=True,
+        enable_model_summary=True,
+        inference_mode=False,
         enable_progress_bar=True,
+        check_val_every_n_epoch=config.training.check_val_every_n_epoch,
+        limit_train_batches=config.training.limit_train_batches,
         limit_val_batches=config.training.limit_val_batches,
         log_every_n_steps=config.training.log_every_n_steps
     )

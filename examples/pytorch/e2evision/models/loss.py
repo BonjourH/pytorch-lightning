@@ -306,9 +306,7 @@ class TrajectoryLoss(nn.Module):
             indices_list.append(indices)
         
         # 使用相同的匹配结果计算每一层的损失
-        for idx, pred_trajs in enumerate(outputs):
-            if idx < final_layer_idx - 2:
-                continue
+        for idx, pred_trajs in enumerate(outputs[1:]):
             # 使用最后一层的匹配结果计算当前层的损失
             layer_losses = self._compute_losses_with_indices(
                 pred_trajs=pred_trajs,
@@ -360,49 +358,52 @@ class TrajectoryLoss(nn.Module):
             neg_weight = min(1.0, (num_positive / max(1, num_negative)) * 2.0)  # 负样本权重自适应调整
             
             # 获取匹配的预测和真实轨迹
-            pred_matched = pred_trajs[b, pred_idx]  # [K, TrajParamIndex.END_OF_INDEX]
             gt_matched = gt_trajs[b, gt_idx]  # [K, TrajParamIndex.END_OF_INDEX]
             
-            # 计算各项损失
-            # 位置损失 (x, y, z) - 使用L1损失
-            # pos_loss += F.l1_loss(
-            #     pred_matched[:, TrajParamIndex.X:TrajParamIndex.Z+1],
-            #     gt_matched[:, TrajParamIndex.X:TrajParamIndex.Z+1]
-            # )
-            pos_loss += QueryPredictionLoss.independent_huber_loss(pred_matched[:, TrajParamIndex.X:TrajParamIndex.Z+1], 
-                                                                   gt_matched[:, TrajParamIndex.X:TrajParamIndex.Z+1], 
-                                                                   1.0)
-            
-            # 尺寸损失 (length, width, height) - 使用L1损失
-            dim_loss += F.l1_loss(
-                pred_matched[:, TrajParamIndex.LENGTH:TrajParamIndex.HEIGHT+1],
-                gt_matched[:, TrajParamIndex.LENGTH:TrajParamIndex.HEIGHT+1]
-            )
-            
-            # 速度损失 (vx, vy) - 使用L1损失
-            vel_loss += F.l1_loss(
-                pred_matched[:, TrajParamIndex.VX:TrajParamIndex.VY+1],
-                gt_matched[:, TrajParamIndex.VX:TrajParamIndex.VY+1]
-            )
-            
-            # 加速度损失 (ax, ay) - 使用L1损失
-            loss_acc += F.l1_loss(
-                pred_matched[:, TrajParamIndex.AX:TrajParamIndex.AY+1],
-                gt_matched[:, TrajParamIndex.AX:TrajParamIndex.AY+1]
-            )
-            
-            # 朝向损失 (yaw) - 使用L1损失
-            yaw_loss += F.l1_loss(
-                pred_matched[:, TrajParamIndex.YAW:TrajParamIndex.YAW+1],
-                gt_matched[:, TrajParamIndex.YAW:TrajParamIndex.YAW+1]
-            )
-            
-            # classification loss
-            loss_cls += F.binary_cross_entropy_with_logits(
-                pred_matched[:, TrajParamIndex.HAS_OBJECT:],
-                gt_matched[:, TrajParamIndex.HAS_OBJECT:]
-            )
-            
+            if num_positive > 0:
+                pred_matched = pred_trajs[b, pred_idx]  # [K, TrajParamIndex.END_OF_INDEX]
+                # 计算各项损失
+                # 位置损失 (x, y, z) - 使用L1损失
+                # pos_loss += F.l1_loss(
+                #     pred_matched[:, TrajParamIndex.X:TrajParamIndex.Z+1],
+                #     gt_matched[:, TrajParamIndex.X:TrajParamIndex.Z+1]
+                # )
+                pos_loss += QueryPredictionLoss.independent_huber_loss(pred_matched[:, TrajParamIndex.X:TrajParamIndex.Z+1], 
+                                                                    gt_matched[:, TrajParamIndex.X:TrajParamIndex.Z+1], 
+                                                                    1.0)
+                
+                # 尺寸损失 (length, width, height) - 使用L1损失
+                dim_loss += F.l1_loss(
+                    pred_matched[:, TrajParamIndex.LENGTH:TrajParamIndex.HEIGHT+1],
+                    gt_matched[:, TrajParamIndex.LENGTH:TrajParamIndex.HEIGHT+1]
+                )
+                
+                # 速度损失 (vx, vy) - 使用L1损失
+                vel_loss += F.l1_loss(
+                    pred_matched[:, TrajParamIndex.VX:TrajParamIndex.VY+1],
+                    gt_matched[:, TrajParamIndex.VX:TrajParamIndex.VY+1]
+                )
+                
+                # 加速度损失 (ax, ay) - 使用L1损失
+                loss_acc += F.l1_loss(
+                    pred_matched[:, TrajParamIndex.AX:TrajParamIndex.AY+1],
+                    gt_matched[:, TrajParamIndex.AX:TrajParamIndex.AY+1]
+                )
+                
+                # 朝向损失 (yaw) - 使用L1损失
+                yaw_loss += F.l1_loss(
+                    pred_matched[:, TrajParamIndex.YAW:TrajParamIndex.YAW+1],
+                    gt_matched[:, TrajParamIndex.YAW:TrajParamIndex.YAW+1]
+                )
+                
+                # classification loss
+                loss_cls += F.binary_cross_entropy_with_logits(
+                    pred_matched[:, TrajParamIndex.HAS_OBJECT:],
+                    gt_matched[:, TrajParamIndex.HAS_OBJECT:]
+                )
+                
+                total_objects += len(gt_idx)
+                
             # 计算未匹配的预测（假阳性）
             all_pred_idx = set(range(pred_trajs.shape[1]))
             unmatched_pred_idx = list(all_pred_idx - set(pred_idx))
@@ -430,8 +431,6 @@ class TrajectoryLoss(nn.Module):
                 #           f"Neg/Pos Ratio: {num_negative/max(1, num_positive):.2f}, Neg Weight: {neg_weight:.4f}")
                 
                 total_fp += len(unmatched_pred_idx)
-            
-            total_objects += len(gt_idx)
         
         # 归一化损失
         if total_objects > 0:

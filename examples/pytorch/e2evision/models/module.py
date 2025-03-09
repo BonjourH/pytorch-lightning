@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 from typing import Dict, List, Optional, Union
 from torch.optim import Adam
-from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.optim.lr_scheduler import CosineAnnealingLR, OneCycleLR
 
 from base import SourceCameraId, TrajParamIndex
 from models.network import E2EPerceptionNet
@@ -41,6 +41,16 @@ class E2EPerceptionModule(L.LightningModule):
         )
         
         # Create scheduler
+        # scheduler = OneCycleLR(
+        #     optimizer,
+        #     max_lr=self.config.training.learning_rate,
+        #     total_steps=self.config.training.max_epochs,
+        #     pct_start=self.config.training.pct_start,
+        #     div_factor=self.config.training.div_factor,
+        #     final_div_factor=self.config.training.final_div_factor,
+        #     three_phase=True
+        # )
+        
         scheduler = CosineAnnealingLR(
             optimizer,
             T_max=self.config.training.max_epochs,

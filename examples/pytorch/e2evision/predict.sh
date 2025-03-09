@@ -16,7 +16,7 @@ PRECISION=${PRECISION:-"16-mixed"}
 CONFIDENCE_THRESHOLD=${CONFIDENCE_THRESHOLD:-0.5}
 CHECKPOINT=${CHECKPOINT:-"last.ckpt"}  # 默认使用保存的最新模型
 CONFIG_FILE=${CONFIG_FILE:-"configs/e2e_perception.yaml"}
-NUM_QUERIES=${NUM_QUERIES:-16}
+NUM_QUERIES=${NUM_QUERIES:-64}
 
 # 创建带时间戳的实验名称
 TIMESTAMP=$(date +%Y%m%d || echo "default")

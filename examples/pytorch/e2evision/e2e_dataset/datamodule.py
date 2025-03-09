@@ -77,7 +77,8 @@ class E2EPerceptionDataModule(L.LightningDataModule):
         return DataLoader(
             self.train_dataset,
             batch_size=self.hparams.batch_size,
-            shuffle=True,
+            shuffle=self.hparams.data_config.shuffle,
+            persistent_workers=self.hparams.data_config.persistent_workers,
             num_workers=self.hparams.num_workers,
             collate_fn=custom_collate_fn,
             pin_memory=True
