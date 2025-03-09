@@ -157,6 +157,7 @@ class LoggingConfig(ConfigBase):
     log_dir: str = 'logs'
     checkpoint_dir: str = 'checkpoints'
     save_top_k: int = 3
+    last_checkpoint_dir: Optional[str] = None 
     # Logger options
     use_tensorboard: bool = True
     use_csv: bool = True

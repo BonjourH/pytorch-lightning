@@ -3,7 +3,8 @@ set -euo pipefail  # Strict error handling mode
 
 # Create a timestamped experiment name
 TIMESTAMP=$(date +%Y%m%d || echo "default")
-EXP_NAME="e2e_perception_${TIMESTAMP}"
+# EXP_NAME="e2e_perception_${TIMESTAMP}"
+EXP_NAME="e2e_perception"
 
 # Training parameters, can be overridden by environment variables
 # Note: These parameters will override those in the configuration file
@@ -14,9 +15,9 @@ NUM_WORKERS=${NUM_WORKERS:-20}  # 默认减少工作线程数为4
 MAX_EPOCHS=${MAX_EPOCHS:-50}
 ACCELERATOR=${ACCELERATOR:-"gpu"}
 DEVICES=${DEVICES:-1}
-PRECISION=${PRECISION:-"16-mixed"} # 16-mixed, 32, 64
+PRECISION=${PRECISION:-32} # 16-mixed, 32, 64
 ACCUMULATE_GRAD_BATCHES=${ACCUMULATE_GRAD_BATCHES:-4}
-NUM_QUERIES=${NUM_QUERIES:-64}
+NUM_QUERIES=${NUM_QUERIES:-16}
 SEED=${SEED:-42}
 RESUME=${RESUME:-0}
 PRETRAINED_WEIGHTS=${PRETRAINED_WEIGHTS:-"true"}
@@ -111,6 +112,7 @@ LOG_FILE="${LOG_DIR}/${EXP_NAME}.log"
     CONFIG_OVERRIDES+=("model.memory_efficient=${MEMORY_EFFICIENT}")  # 添加内存效率配置
     CONFIG_OVERRIDES+=("model.decoder.num_queries=${NUM_QUERIES}")
     CONFIG_OVERRIDES+=("logging.checkpoint_dir=${CHECKPOINT_DIR}")
+    CONFIG_OVERRIDES+=("logging.last_checkpoint_dir=$(dirname "$(realpath "$0")")")
     CONFIG_OVERRIDES+=("logging.log_dir=${LOG_DIR}")
     CONFIG_OVERRIDES+=("logging.run_id=${RUN_ID}")
     CONFIG_OVERRIDES+=("logging.use_tensorboard=true")
