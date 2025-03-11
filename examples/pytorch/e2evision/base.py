@@ -48,14 +48,31 @@ class CameraParamIndex(IntEnum):
     K4 = 11
     P1 = 12
     P2 = 13
-    X = 14
-    Y = 15
-    Z = 16
-    QX = 17
-    QY = 18
-    QZ = 19
-    QW = 20
-    END_OF_INDEX = 21
+    R_EGO_TO_CAMERA_11 = 14
+    R_EGO_TO_CAMERA_12 = 15
+    R_EGO_TO_CAMERA_13 = 16
+    R_EGO_TO_CAMERA_21 = 17
+    R_EGO_TO_CAMERA_22 = 18
+    R_EGO_TO_CAMERA_23 = 19
+    R_EGO_TO_CAMERA_31 = 20
+    R_EGO_TO_CAMERA_32 = 21
+    R_EGO_TO_CAMERA_33 = 22
+    T_EGO_TO_CAMERA_X = 23
+    T_EGO_TO_CAMERA_Y = 24
+    T_EGO_TO_CAMERA_Z = 25
+    R_CAMERA_TO_EGO_11 = 26
+    R_CAMERA_TO_EGO_12 = 27
+    R_CAMERA_TO_EGO_13 = 28
+    R_CAMERA_TO_EGO_21 = 29
+    R_CAMERA_TO_EGO_22 = 30
+    R_CAMERA_TO_EGO_23 = 31
+    R_CAMERA_TO_EGO_31 = 32
+    R_CAMERA_TO_EGO_32 = 33
+    R_CAMERA_TO_EGO_33 = 34
+    T_CAMERA_TO_EGO_X = 35
+    T_CAMERA_TO_EGO_Y = 36
+    T_CAMERA_TO_EGO_Z = 37
+    END_OF_INDEX = 38
 
 # EGO STATE RELATED
 class EgoStateIndex(IntEnum):

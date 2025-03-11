@@ -121,8 +121,8 @@ class TrajectoryDecoder(nn.Module):
         self.query_pos = nn.Parameter(torch.randn(num_queries, query_dim))
         
         # Sample points on unit cube for feature gathering
-        self.register_buffer('unit_points', self._generate_unit_cube_points(num_points))
-        self.register_buffer('origin_point', torch.zeros(1, 3))
+        self.register_buffer('unit_points', self._generate_unit_cube_points(num_points)) # [P, 3]
+        self.register_buffer('origin_point', torch.zeros(1, 3)) # [1, 3]
         
         # Parameter ranges for normalization: torch.Tensor[TrajParamIndex.HEIGHT + 1, 2]
         ranges = self._get_motion_param_range()
@@ -258,7 +258,9 @@ class TrajectoryDecoder(nn.Module):
                     points.append(torch.stack([grid_x, grid_y, z], dim=-1))
         
         points = torch.cat([p.reshape(-1, 3) for p in points], dim=0)
-        
+        # add origin point
+        points = torch.cat([torch.zeros(1, 3), points], dim=0)
+        points = points.transpose(0, 1)
         return points
     
     def _get_motion_param_range(self)->torch.Tensor:
@@ -308,16 +310,12 @@ class TrajectoryDecoder(nn.Module):
         height = traj_params[..., TrajParamIndex.HEIGHT].unsqueeze(-1)  # [B, N, 1]
         
         # Scale unit cube points by dimensions
-        # unit_points: [num_points, 3]
+        # unit_points: [3, P]
         # dims: [B, N, 3]
         dims = torch.stack([length, width, height], dim=-1)  # [B, N, 1, 3]
-         
-        # Scale unit cube points by dimensions and ensure same device
-        box_points = self.unit_points.unsqueeze(0).unsqueeze(0) * dims  # [B, N, num_points, 3]
-        # return box_points
-        origin_point = self.origin_point.unsqueeze(0).unsqueeze(0).repeat(traj_params.shape[0], traj_params.shape[1], 1, 1)
-        results = torch.cat([origin_point, box_points], dim=-2)
-        return results
+        dims = dims.permute(0, 1, 3, 2)  # [B, N, 3, 1]
+        box_points = self.unit_points * dims  # [B, N, 3, P]
+        return box_points
     
     def gather_point_features(self, 
                             box_points: torch.Tensor, 
@@ -485,7 +483,7 @@ class TrajectoryDecoder(nn.Module):
         
         Args:
             points: Tensor[B, N, P, 3]
-            ego_state: Tensor[B, 5] with position, yaw, timestamp
+            ego_state: Tensor[B, EgoStateIndex.END_OF_INDEX] with position, yaw, timestamp
             
         Returns:
             Tensor[B, N, P, 3]

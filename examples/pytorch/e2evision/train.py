@@ -214,7 +214,8 @@ def main():
         check_val_every_n_epoch=config.training.check_val_every_n_epoch,
         limit_train_batches=config.training.limit_train_batches,
         limit_val_batches=config.training.limit_val_batches,
-        log_every_n_steps=config.training.log_every_n_steps
+        log_every_n_steps=config.training.log_every_n_steps,
+        num_sanity_val_steps=config.training.num_sanity_val_steps
     )
     
     # Get checkpoint path

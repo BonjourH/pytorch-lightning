@@ -10,7 +10,7 @@ EXP_NAME="e2e_perception"
 # Note: These parameters will override those in the configuration file
 TRAIN_LIST=${TRAIN_LIST:-"train_clips.txt"}
 VAL_LIST=${VAL_LIST:-"val_clips.txt"}
-BATCH_SIZE=${BATCH_SIZE:-1}  # 默认减小批量大小为1
+BATCH_SIZE=${BATCH_SIZE:-2}  # 默认减小批量大小为1
 NUM_WORKERS=${NUM_WORKERS:-20}  # 默认减少工作线程数为4
 MAX_EPOCHS=${MAX_EPOCHS:-5000}
 ACCELERATOR=${ACCELERATOR:-"gpu"}

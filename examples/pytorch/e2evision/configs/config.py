@@ -80,7 +80,7 @@ class DataConfig(ConfigBase):
     train_list: str = "train_clips.txt"
     val_list: str = "val_clips.txt"
     test_list: str = "test_list.txt"
-    sequence_length: int = 10
+    sequence_length: int = 4
     shuffle: bool = False
     persistent_workers: bool = False
     batch_size: int = 1
@@ -140,6 +140,7 @@ class TrainingConfig(ConfigBase):
     use_checkpoint: bool = True
     log_every_n_steps: int = 30
     check_val_every_n_epoch: int = 5
+    num_sanity_val_steps: int = 0 # 0: no sanity check, 1: check 1 batch, -1: check all batches
 
 @dataclass
 class InferenceConfig(ConfigBase):
@@ -211,6 +212,9 @@ class LoggingConfig(ConfigBase):
         'train/layer_1_loss_cls_epoch',
         'train/layer_1_fp_loss_exist_epoch'
     ])
+    # for intermediate results
+    visualize_intermediate_results: bool = True
+    visualize_intermediate_results_dir: str = 'visualize_intermediate_results'
     
 @dataclass
 class LossConfig(ConfigBase):

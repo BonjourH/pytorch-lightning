@@ -32,8 +32,36 @@ class TrainingSample:
                  ego_state: torch.Tensor):
         self.image_paths.append(image_paths)
         self.ego_states.append(ego_state)
+        
+    @staticmethod
+    def read_seqeuntial_images_to_tensor(img_paths: List[Dict[SourceCameraId, str]], device: torch.device) -> Dict[str, torch.Tensor]:
+        """
+        Read images from image paths.
+        
+        Args:
+            img_paths: List[List[Dict[SourceCameraId, str]]]
+            
+        Returns:
+            Dict[SourceCameraId, torch.Tensor]
+            camera_id -> torch.Tensor[B, T, C, H, W]
+        """
+        imgs = {cam_id: [] for cam_id in img_paths[0][0].keys()}
+        B, T = len(img_paths), len(img_paths[0])
+        for b_idx in range(B):
+            for t_idx in range(T):
+                for cam_id, img_path in img_paths[b_idx][t_idx].items():
+                    img = Image.open(img_path)
+                    img_np = np.array(img)
+                    if len(img_np.shape) == 3:
+                        img_np = img_np.transpose(2, 0, 1)
+                    img = torch.from_numpy(img_np).float().to(device)
+                    imgs[cam_id].append(img)
+        for cam_id in imgs.keys():
+            C, H, W = imgs[cam_id][0].shape
+            imgs[cam_id] = torch.stack(imgs[cam_id])
+            imgs[cam_id] = imgs[cam_id].view(B, T, C, H, W).permute(0, 1, 3, 4, 2) # [B, T, H, W, C]
+        return imgs
     
-
 class MultiFrameDataset(Dataset):
     """Dataset for multi-frame multi-camera perception."""
     def __init__(self, clip_dirs: List[str], config: DataConfig = None):
@@ -97,14 +125,28 @@ class MultiFrameDataset(Dataset):
 
                     # Set extrinsic parameters
                     # from ego frame to camera frame
-                    camera_params[CameraParamIndex.X] = calib_data['extrinsic']['tx']
-                    camera_params[CameraParamIndex.Y] = calib_data['extrinsic']['ty']
-                    camera_params[CameraParamIndex.Z] = calib_data['extrinsic']['tz']
-                    camera_params[CameraParamIndex.QX] = calib_data['extrinsic']['qx']
-                    camera_params[CameraParamIndex.QY] = calib_data['extrinsic']['qy']
-                    camera_params[CameraParamIndex.QZ] = calib_data['extrinsic']['qz']
-                    camera_params[CameraParamIndex.QW] = calib_data['extrinsic']['qw']
-
+                    qx = float(calib_data['extrinsic']['qx'])
+                    qy = float(calib_data['extrinsic']['qy'])
+                    qz = float(calib_data['extrinsic']['qz'])
+                    qw = float(calib_data['extrinsic']['qw'])
+                    rot_ego_to_camera = torch.tensor([
+                        [1 - 2 * (qy * qy + qz * qz), 2 * (qx * qy - qz * qw), 2 * (qx * qz + qy * qw)],
+                        [2 * (qx * qy + qz * qw), 1 - 2 * (qx * qx + qz * qz), 2 * (qy * qz - qx * qw)],
+                        [2 * (qx * qz - qy * qw), 2 * (qy * qz + qx * qw), 1 - 2 * (qx * qx + qy * qy)]
+                    ])
+                    t_ego_to_camera = torch.tensor([
+                        float(calib_data['extrinsic']['tx']),
+                        float(calib_data['extrinsic']['ty']),
+                        float(calib_data['extrinsic']['tz'])
+                    ])
+                    rot_camera_to_ego = rot_ego_to_camera.transpose(0, 1)
+                    t_camera_to_ego = -rot_camera_to_ego @ t_ego_to_camera
+                    
+                    camera_params[CameraParamIndex.R_EGO_TO_CAMERA_11:CameraParamIndex.R_EGO_TO_CAMERA_33+1] = rot_ego_to_camera.reshape(-1)
+                    camera_params[CameraParamIndex.T_EGO_TO_CAMERA_X:CameraParamIndex.T_EGO_TO_CAMERA_Z+1] = t_ego_to_camera.reshape(-1)
+                    camera_params[CameraParamIndex.R_CAMERA_TO_EGO_11:CameraParamIndex.R_CAMERA_TO_EGO_33+1] = rot_camera_to_ego.reshape(-1)
+                    camera_params[CameraParamIndex.T_CAMERA_TO_EGO_X:CameraParamIndex.T_CAMERA_TO_EGO_Z+1] = t_camera_to_ego.reshape(-1)
+                    
                     # Store camera parameters
                     calibrations[camera_id] = camera_params
 
@@ -142,7 +184,8 @@ class MultiFrameDataset(Dataset):
                         img_paths[camera_id] = img_path
                     
                     # Collect Ego State
-                    ego_state = torch.zeros(EgoStateIndex.END_OF_INDEX, dtype=torch.float64)  # 使用 float64 保证精度
+                    # ego_state = torch.zeros(EgoStateIndex.END_OF_INDEX, dtype=torch.float64)  # 使用 float64 保证精度
+                    ego_state = torch.zeros(EgoStateIndex.END_OF_INDEX)
                     # 确保时间戳保留小数精度
                     timestamp_float = float(ego_states[i]['timestamp'])
                     ego_state[EgoStateIndex.TIMESTAMP] = timestamp_float
@@ -165,7 +208,8 @@ class MultiFrameDataset(Dataset):
                     # then frame1 to frame2 is (R2^T * R1, R2^T * (t1 - t2)) => (yaw1 - yaw2, xx, xx)
                     # here frame1 is the last ego frame, frame2 is the current ego frame we set the variable
                     
-                    ego_state[EgoStateIndex.PITCH_CORRECTION] = ego_states[i].get('pitch', 0.0)
+                    # ego_state[EgoStateIndex.PITCH_CORRECTION] = float(ego_states[i]['pitch'])
+                    ego_state[EgoStateIndex.PITCH_CORRECTION] = ego_states[i]['pitch']
                     # ego_state[EgoStateIndex.VX] = ego_states[i].get('speed', 0.0)
                     # ego_state[EgoStateIndex.VY] = ego_states[i].get('vy', 0.0)
                     # ego_state[EgoStateIndex.AX] = ego_states[i].get('acceleration', 0.0)
@@ -217,6 +261,7 @@ class MultiFrameDataset(Dataset):
         T = len(sample.ego_states)
         
         ret = {
+            'image_paths': sample.image_paths, # List[Dict[SourceCameraId, str]]
             'images': {},  # Dict[str -> Tensor[T, N_cams, C, H, W]]
             'calibrations': sample.calibrations,  # Dict[camera_id -> Tensor[CameraParamIndex.END_OF_INDEX]]
             'ego_states': torch.stack(sample.ego_states),  # Tensor[T, EgoStateIndex.END_OF_INDEX]
@@ -249,6 +294,7 @@ def custom_collate_fn(batch: List[Dict]) -> Dict:
     T = len(batch[0]['ego_states'])
     
     collated = {
+        'image_paths': [b['image_paths'] for b in batch],  # List[Dict[SourceCameraId, str]]
         'images': {},      # Dict[str -> Tensor[B, T, N_cams, C, H, W]]
         'calibrations': {},  # Dict[camera_id -> Tensor[B, CameraParamIndex.END_OF_INDEX]]
         'valid_traj_nb': torch.zeros(B),  # Tensor[B]
