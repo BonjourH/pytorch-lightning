@@ -208,9 +208,8 @@ class E2EPerceptionModule(L.LightningModule):
             for camera_id in concat_imgs.keys():
                 img_name = f'{camera_id.name}_{batch_idx}.png'
                 cv2.imwrite(os.path.join(save_dir, img_name), concat_imgs[camera_id])
-                import pdb; pdb.set_trace()
 
-            import pdb; pdb.set_trace()
+        exit(0)
         return loss_dict
     
     def validation_step(self, batch: Dict, batch_idx: int) -> Dict:
