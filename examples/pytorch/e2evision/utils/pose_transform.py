@@ -120,7 +120,7 @@ def get_transform_from_object_to_camera(
     return tr_ob_to_camera
 
 
-def camera_to_pixel(cam_points: torch.Tensor, calib_params: torch.Tensor) -> torch.Tensor:
+def camera_to_pixel(cam_points: torch.Tensor, calib_params: torch.Tensor, normalize: bool = True) -> torch.Tensor:
     """
     Project points to image.
     Args:
@@ -213,8 +213,12 @@ def camera_to_pixel(cam_points: torch.Tensor, calib_params: torch.Tensor) -> tor
     y_pixel = fy * y_distorted + cy
     
     # normalize to [0, 1] for consistency with the visibility check in gather_point_features
-    x_norm = x_pixel / img_width
-    y_norm = y_pixel / img_height
+    if normalize:
+        x_norm = x_pixel / img_width
+        y_norm = y_pixel / img_height
+    else:
+        x_norm = x_pixel
+        y_norm = y_pixel
     
     points_2d = torch.stack([x_norm, y_norm], dim=-1) # [B, C, NTP, 2]
     behind_camera = (z_cam <= 0)  # [B, C, NTP]
