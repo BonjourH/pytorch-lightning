@@ -16,7 +16,7 @@ from configs.config import DataConfig
 import numpy as np
 
 
-MAX_TRAJ_NB = 1
+MAX_TRAJ_NB = 128
 
 class TrainingSample:
     """Container for multi-frame training data."""
@@ -243,7 +243,6 @@ class MultiFrameDataset(Dataset):
                             traj[ObjectType[obj_data.get('type', 'UNKNOWN')]] = 1.0
                             
                             trajs.append(traj)
-                            break
                         assert len(trajs) <= MAX_TRAJ_NB, f"Number of trajectories exceeds MAX_TRAJ_NB: {len(trajs)}"
                         sample.trajs = torch.stack(trajs)
                 

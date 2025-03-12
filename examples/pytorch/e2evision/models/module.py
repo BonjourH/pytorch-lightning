@@ -121,20 +121,24 @@ class E2EPerceptionModule(L.LightningModule):
             
             tmp_pixel[tmp_invalid_mask, :] = -1
             
-            tmp_pixel = tmp_pixel.long()
+            h_coords = tmp_pixel[:, :, :, 1].long()
+            w_coords = tmp_pixel[:, :, :, 0].long()
             mask = torch.ones_like(img_sequence).to(self.device) # [B, T, H, W, 3]
-            for i in range(-3, 3):
-                for j in range(-3, 3):
-                    mask[..., tmp_pixel[:, :, :, 1] + i, tmp_pixel[:, :, :, 0] + j, :] = 0
-            # mask[..., tmp_pixel[:, :, :, 1], tmp_pixel[:, :, :, 0], :] = 0
+            
+            # 利用PyTorch的高级索引功能，通过向量化操作快速修改像素
+            batch_indices = torch.arange(B, device=self.device)[:, None, None].expand(-1, T, N*P)
+            time_indices = torch.arange(T, device=self.device)[None, :, None].expand(B, -1, N*P)
+            r = (self.config.logging.point_radius + 1) // 2
+            r = max(r, 1)
+            for i in range(-r, r):
+                h_indices = h_coords + i
+                h_indices = torch.clamp(h_indices, 0, H - 1)
+                for j in range(-r, r):
+                    w_indices = w_coords + j
+                    w_indices = torch.clamp(w_indices, 0, W - 1)
+                    mask[batch_indices, time_indices, h_indices, w_indices, :] = 0
             img_sequence = img_sequence * mask + color * (1 - mask)
             imgs_dict[camera_id] = img_sequence
-            
-            # NOTE: currently i don't know why this code report bug if use
-            # img_sequence[..., tmp_pixel[:, :, :, 1], tmp_pixel[:, :, :, 0], :] = color
-            # linearIndex.numel()*sliceSize*nElemBefore == expandedValue.numel() INTERNAL ASSERT FAILED 
-            # at "/pytorch/aten/src/ATen/native/cuda/Indexing.cu":548, please report a bug to PyTorch. 
-            # number of flattened indices did not match number of elements in the value tensor: 52185600 vs 270
             
             # save concat imgs
             cimg = img_sequence.permute(0, 2, 1, 3, 4) # [B, H, T, W, 3]
@@ -143,6 +147,12 @@ class E2EPerceptionModule(L.LightningModule):
             cimg = cimg.astype(np.uint8)
             concat_imgs[camera_id] = cimg
             
+            # NOTE: img_sequence[batch_indices, time_indices, tmp_pixel[:, :, :, 1], tmp_pixel[:, :, :, 0], :] = color
+            # will report error: img_sequence[batch_indices, time_indices, tmp_pixel[:, :, :, 1], tmp_pixel[:, :, :, 0], :] = color
+            # RuntimeError: linearIndex.numel()*sliceSize*nElemBefore == expandedValue.numel() INTERNAL ASSERT FAILED at 
+            # "/pytorch/aten/src/ATen/native/cuda/Indexing.cu":548, please report a bug to PyTorch. number of flattened indices 
+            # did not match number of elements in the value tensor: 15360 vs 9
+
             debug = False
             if debug:
                 cv2.imwrite('img2.png', cimg)

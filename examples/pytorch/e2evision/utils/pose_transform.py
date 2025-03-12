@@ -55,7 +55,7 @@ def get_transform_from_object_to_camera(
     speed_t = torch.sqrt(vel_x_t*vel_x_t + vel_y_t*vel_y_t)
     
     # If speed is sufficient, use velocity direction; otherwise use provided yaw
-    yaw_t = torch.where(speed_t > 0.2, torch.atan2(vel_y_t, vel_x_t), yaw)
+    yaw_t = torch.where(speed_t > -1, 0, torch.atan2(vel_y_t, vel_x_t))#, yaw)
     
     # now we have pos_x_t, pos_y_t, pos_z_t, yaw_t, which is the Transform from object to current ego frame
     # shape: [B, N, T]
@@ -90,7 +90,7 @@ def get_transform_from_object_to_camera(
     ], dim=-1).reshape(B, N, T, 3, 1)
     
     # 4. calculate the dynamic camera extrinsic parameters with pitch correction
-    pitch_correction = ego_states[..., EgoStateIndex.PITCH_CORRECTION] # [B, T]
+    pitch_correction = -ego_states[..., EgoStateIndex.PITCH_CORRECTION] # [B, T]
     cos_pitch, sin_pitch = torch.cos(pitch_correction), torch.sin(pitch_correction)
     ones, zeros = torch.ones_like(cos_pitch), torch.zeros_like(cos_pitch)
     R_perturbation = torch.stack([
