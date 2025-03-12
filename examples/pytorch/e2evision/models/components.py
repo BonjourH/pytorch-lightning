@@ -121,7 +121,8 @@ class TrajectoryDecoder(nn.Module):
         self.query_pos = nn.Parameter(torch.randn(num_queries, query_dim))
         
         # Sample points on unit cube for feature gathering
-        self.register_buffer('unit_points', self._generate_unit_cube_points(num_points)) # [P, 3]
+        # self.register_buffer('unit_points', self._generate_unit_cube_points(num_points)) # [P, 3]
+        self.register_buffer('unit_points', self._generate_bbox_corners_points()) # [3, 8]
         self.register_buffer('origin_point', torch.zeros(1, 3)) # [1, 3]
         
         # Parameter ranges for normalization: torch.Tensor[TrajParamIndex.HEIGHT + 1, 2]
@@ -260,8 +261,27 @@ class TrajectoryDecoder(nn.Module):
         points = torch.cat([p.reshape(-1, 3) for p in points], dim=0)
         # add origin point
         points = torch.cat([torch.zeros(1, 3), points], dim=0)
-        points = points.transpose(0, 1)
+        points = points.transpose(0, 1) # [3, P]
+        points /= 2.0
         return points
+    
+    def _generate_bbox_corners_points(self) -> torch.Tensor:
+        """Generate sample points on corners of 3D bounding box.
+        
+        Returns:
+            Tensor of shape [8, 3] containing sampled points
+        """
+        corners = torch.tensor([
+            [0.5, 0.5, -0.5], # front left bottom
+            [0.5, -0.5, -0.5], # front right bottom
+            [-0.5, -0.5, -0.5], # rear right bottom
+            [-0.5, 0.5, -0.5], # rear left bottom
+            [0.5, 0.5, 0.5], # front left top
+            [0.5, -0.5, 0.5], # front right top
+            [-0.5, -0.5, 0.5], # rear right top
+            [-0.5, 0.5, 0.5], # rear left top
+        ]).transpose(0, 1) # [3, 8]
+        return corners
     
     def _get_motion_param_range(self)->torch.Tensor:
         """Get parameter ranges for normalization.

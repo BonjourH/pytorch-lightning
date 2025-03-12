@@ -101,8 +101,8 @@ def get_transform_from_object_to_camera(
     
     R_ego_to_camera = calibrations[..., CameraParamIndex.R_EGO_TO_CAMERA_11:
                                    CameraParamIndex.R_EGO_TO_CAMERA_33+1].reshape(B, C, 3, 3).unsqueeze(2)
-    t_cam_to_ego = calibrations[..., CameraParamIndex.T_EGO_TO_CAMERA_X:
-                                CameraParamIndex.T_EGO_TO_CAMERA_Z+1].reshape(B, C, 3, 1).unsqueeze(2)
+    t_cam_to_ego = calibrations[..., CameraParamIndex.T_CAMERA_TO_EGO_X:
+                                CameraParamIndex.T_CAMERA_TO_EGO_Z+1].reshape(B, C, 3, 1).unsqueeze(2)
     
     R_ego_to_cam_refined = R_ego_to_camera @ R_perturbation # [B, C, T, 3, 3]
     t_ego_to_cam_refined = -R_ego_to_cam_refined @ t_cam_to_ego # [B, C, T, 3, 1]

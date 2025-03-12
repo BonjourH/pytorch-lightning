@@ -16,7 +16,7 @@ from configs.config import DataConfig
 import numpy as np
 
 
-MAX_TRAJ_NB = 128
+MAX_TRAJ_NB = 1
 
 class TrainingSample:
     """Container for multi-frame training data."""
@@ -243,6 +243,7 @@ class MultiFrameDataset(Dataset):
                             traj[ObjectType[obj_data.get('type', 'UNKNOWN')]] = 1.0
                             
                             trajs.append(traj)
+                            break
                         assert len(trajs) <= MAX_TRAJ_NB, f"Number of trajectories exceeds MAX_TRAJ_NB: {len(trajs)}"
                         sample.trajs = torch.stack(trajs)
                 
@@ -287,6 +288,17 @@ class MultiFrameDataset(Dataset):
             ret['images'][camera_group.name] = torch.stack(imgs) # [T, N_cams, C, H, W]
         return ret
 
+CAMERA_ID_LIST = [
+    SourceCameraId.FRONT_LEFT_CAMERA,
+    SourceCameraId.FRONT_RIGHT_CAMERA,
+    SourceCameraId.FRONT_CENTER_CAMERA,
+    SourceCameraId.SIDE_LEFT_CAMERA,
+    SourceCameraId.SIDE_RIGHT_CAMERA,
+    SourceCameraId.REAR_LEFT_CAMERA,
+    SourceCameraId.REAR_RIGHT_CAMERA,
+]
+
+CAMERA_ID_TO_INDEX = {camera_id: i for i, camera_id in enumerate(CAMERA_ID_LIST)}
     
 def custom_collate_fn(batch: List[Dict]) -> Dict:
     """Custom collate function for DataLoader."""
@@ -296,7 +308,8 @@ def custom_collate_fn(batch: List[Dict]) -> Dict:
     collated = {
         'image_paths': [b['image_paths'] for b in batch],  # List[Dict[SourceCameraId, str]]
         'images': {},      # Dict[str -> Tensor[B, T, N_cams, C, H, W]]
-        'calibrations': {},  # Dict[camera_id -> Tensor[B, CameraParamIndex.END_OF_INDEX]]
+        'camera_ids': CAMERA_ID_LIST,
+        'calibrations': torch.zeros(B, 7, CameraParamIndex.END_OF_INDEX),
         'valid_traj_nb': torch.zeros(B),  # Tensor[B]
         'trajs': torch.zeros(B, MAX_TRAJ_NB, TrajParamIndex.END_OF_INDEX),  # Tensor[B, MAX_TRAJ_NB, TrajParamIndex.END_OF_INDEX]   
         'ego_states': torch.stack([b['ego_states'] for b in batch])  # Tensor[B, T, EgoStateIndex.END_OF_INDEX]
@@ -307,8 +320,9 @@ def custom_collate_fn(batch: List[Dict]) -> Dict:
         collated['images'][camera_group_name] = torch.stack([b['images'][camera_group_name] for b in batch])
     
     # Collate calibrations
-    for camera_id in batch[0]['calibrations'].keys():
-        collated['calibrations'][camera_id] = torch.stack([b['calibrations'][camera_id] for b in batch])
+    for b_idx, b in enumerate(batch):
+        for camera_id in b['calibrations'].keys():
+            collated['calibrations'][b_idx, CAMERA_ID_TO_INDEX[camera_id]] = b['calibrations'][camera_id]
 
     # Collate trajectories
     for b_idx, b in enumerate(batch):

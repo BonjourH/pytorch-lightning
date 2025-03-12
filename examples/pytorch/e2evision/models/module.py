@@ -75,7 +75,8 @@ class E2EPerceptionModule(L.LightningModule):
     
     def _render_trajs_on_imgs(self, 
                       trajs: torch.Tensor, 
-                      calibrations: Dict[SourceCameraId, torch.Tensor],
+                      camera_ids: List[SourceCameraId],
+                      calibrations: torch.Tensor,
                       ego_states: torch.Tensor, 
                       imgs_dict: Dict[SourceCameraId, torch.Tensor], 
                       color: torch.Tensor=torch.tensor([255.0, 0.0, 0.0])) -> Tuple[Dict[SourceCameraId, torch.Tensor], Dict[SourceCameraId, np.ndarray]]:
@@ -83,16 +84,14 @@ class E2EPerceptionModule(L.LightningModule):
         Render trajectories on images.
         Args:
             trajs: [B, N, TrajParamIndex.END_OF_INDEX]
-            calibrations: Dict[SourceCameraId, torch.Tensor[B, CameraParamIndex.END_OF_INDEX]]
+            camera_ids: List[SourceCameraId]
+            calibrations: torch.Tensor[B, Ncams, CameraParamIndex.END_OF_INDEX]
             ego_states: torch.Tensor[B, EgoStateParamIndex.END_OF_INDEX]
             imgs_dict: Dict[SourceCameraId, torch.Tensor[B, T, 3, H, W]]
         Returns:
             imgs_dict: Dict[SourceCameraId, torch.Tensor[B, T, 3, H, W]]
             concat_imgs: Dict[SourceCameraId, np.ndarray]
         """
-        
-        camera_ids = list(calibrations.keys())
-        calibrations = torch.stack(list(calibrations.values()), dim=1)
         
         pixels, _ = project_points_to_image(trajs, calibrations, ego_states, self.net.decoder.unit_points)
         B, C, N, T, P, _ = pixels.shape # [B, C, N, T, P, 2]
@@ -124,7 +123,10 @@ class E2EPerceptionModule(L.LightningModule):
             
             tmp_pixel = tmp_pixel.long()
             mask = torch.ones_like(img_sequence).to(self.device) # [B, T, H, W, 3]
-            mask[..., tmp_pixel[:, :, :, 1], tmp_pixel[:, :, :, 0], :] = 0
+            for i in range(-3, 3):
+                for j in range(-3, 3):
+                    mask[..., tmp_pixel[:, :, :, 1] + i, tmp_pixel[:, :, :, 0] + j, :] = 0
+            # mask[..., tmp_pixel[:, :, :, 1], tmp_pixel[:, :, :, 0], :] = 0
             img_sequence = img_sequence * mask + color * (1 - mask)
             imgs_dict[camera_id] = img_sequence
             
@@ -143,7 +145,7 @@ class E2EPerceptionModule(L.LightningModule):
             
             debug = False
             if debug:
-                cv2.imwrite('img.png', cimg)
+                cv2.imwrite('img2.png', cimg)
                 cv2.imshow('img', cimg)
                 cv2.waitKey(0)
     
@@ -158,6 +160,7 @@ class E2EPerceptionModule(L.LightningModule):
         
         # 2. render gt trajs
         imgs_dict, concat_imgs = self._render_trajs_on_imgs(batch['trajs'], 
+                                                    batch['camera_ids'],
                                                     batch['calibrations'],
                                                     batch['ego_states'], 
                                                     imgs_dict,
@@ -191,12 +194,14 @@ class E2EPerceptionModule(L.LightningModule):
             imgs_dict = TrainingSample.read_seqeuntial_images_to_tensor(batch['image_paths'], self.device)
             # 2. render gt trajs
             imgs_dict, concat_imgs = self._render_trajs_on_imgs(batch['trajs'], 
+                                                    batch['camera_ids'],
                                                     batch['calibrations'],
                                                     batch['ego_states'], 
                                                     imgs_dict,
                                                     color=torch.tensor([0.0, 255.0, 0.0]))
             # 3. render pred trajs
             # imgs_dict, concat_imgs = self._render_trajs_on_imgs(outputs[-1]['trajs'], 
+            #                                         batch['camera_ids'],
             #                                         batch['calibrations'],
             #                                         batch['ego_states'], 
             #                                         imgs_dict,
