@@ -55,7 +55,7 @@ def get_transform_from_object_to_camera(
     speed_t = torch.sqrt(vel_x_t*vel_x_t + vel_y_t*vel_y_t)
     
     # If speed is sufficient, use velocity direction; otherwise use provided yaw
-    yaw_t = torch.where(speed_t > -1, 0, torch.atan2(vel_y_t, vel_x_t))#, yaw)
+    yaw_t = torch.where(speed_t > 0.2, torch.atan2(vel_y_t, vel_x_t), yaw)
     
     # now we have pos_x_t, pos_y_t, pos_z_t, yaw_t, which is the Transform from object to current ego frame
     # shape: [B, N, T]
@@ -67,26 +67,28 @@ def get_transform_from_object_to_camera(
     ego_y = ego_states[..., EgoStateIndex.Y].unsqueeze(1)  # [B, 1, T]
     
     # 3. get transformation T_ob_to_ego_previous from local object coordinates to previous ego frame
-    cos_yaw = torch.cos(yaw_t)
-    sin_yaw = torch.sin(yaw_t)
-    x_rotated = pos_x_t * cos_yaw - pos_y_t * sin_yaw + ego_x # [B, N, T]
-    y_rotated = pos_x_t * sin_yaw + pos_y_t * cos_yaw + ego_y # [B, N, T]
+    cos_yaw = torch.cos(ego_yaw)
+    sin_yaw = torch.sin(ego_yaw)
+    tx_to_previous_ego = pos_x_t * cos_yaw - pos_y_t * sin_yaw + ego_x # [B, N, T]
+    ty_to_previous_ego = pos_x_t * sin_yaw + pos_y_t * cos_yaw + ego_y # [B, N, T]
     
     yaw_to_previous_ego = yaw_t + ego_yaw # [B, N, T]
+      
+    cos1, sin1 = torch.cos(yaw_to_previous_ego), torch.sin(yaw_to_previous_ego)
     
-    zeros = torch.zeros_like(cos_yaw)
-    ones = torch.ones_like(cos_yaw)
+    zeros = torch.zeros_like(yaw_to_previous_ego)
+    ones = torch.ones_like(yaw_to_previous_ego)
     
     R_ob_to_ego_previous = torch.stack([
-        cos_yaw, -sin_yaw, zeros,
-        sin_yaw, cos_yaw, zeros,
+        cos1, -sin1, zeros,
+        sin1, cos1, zeros,
         zeros, zeros, ones
     ], dim=-1).reshape(B, N, T, 3, 3)
     
     t_ob_to_ego_previous = torch.stack([
-        x_rotated,
-        y_rotated,
-        pos_z_t * torch.ones_like(x_rotated)
+        tx_to_previous_ego,
+        ty_to_previous_ego,
+        pos_z_t * torch.ones_like(tx_to_previous_ego)
     ], dim=-1).reshape(B, N, T, 3, 1)
     
     # 4. calculate the dynamic camera extrinsic parameters with pitch correction

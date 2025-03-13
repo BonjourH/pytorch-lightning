@@ -80,7 +80,7 @@ class DataConfig(ConfigBase):
     train_list: str = "train_clips.txt"
     val_list: str = "val_clips.txt"
     test_list: str = "test_list.txt"
-    sequence_length: int = 5
+    sequence_length: int = 3
     shuffle: bool = False
     persistent_workers: bool = False
     batch_size: int = 1

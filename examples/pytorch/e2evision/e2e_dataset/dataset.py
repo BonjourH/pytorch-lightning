@@ -14,6 +14,7 @@ from base import (
 )
 from configs.config import DataConfig
 import numpy as np
+from utils.math_utils import quaternion2RotationMatix
 
 
 MAX_TRAJ_NB = 128
@@ -168,9 +169,18 @@ class MultiFrameDataset(Dataset):
                 
                 # Get state for the last frame
                 last_ego_state = ego_states[start_idx + self.config.sequence_length - 1]
-                x_ref, y_ref = last_ego_state['x'], last_ego_state['y']
+                time_ref = float(last_ego_state['timestamp'])
+                
+                # calculate transformation from ego frame to global frame
                 qw, qx, qy, qz = last_ego_state['qw'], last_ego_state['qx'], last_ego_state['qy'], last_ego_state['qz']
-                yaw_ref = np.arctan2(2 * (qw * qz + qx * qy), 1 - 2 * (qy * qy + qz * qz))
+                tx, ty, tz = last_ego_state['x'], last_ego_state['y'], last_ego_state['z']
+                rot_ego_to_global = quaternion2RotationMatix(qw, qx, qy, qz)
+                t_ego_to_global = torch.tensor([tx, ty, tz])
+                
+                
+                # x_ref, y_ref = last_ego_state['x'], last_ego_state['y']
+                # qw, qx, qy, qz = last_ego_state['qw'], last_ego_state['qx'], last_ego_state['qy'], last_ego_state['qz']
+                # yaw_ref = np.arctan2(2 * (qw * qz + qx * qy), 1 - 2 * (qy * qy + qz * qz))
                 
                 # Add frames to sample
                 for i in range(start_idx, start_idx + self.config.sequence_length):
@@ -188,16 +198,28 @@ class MultiFrameDataset(Dataset):
                     ego_state = torch.zeros(EgoStateIndex.END_OF_INDEX)
                     # 确保时间戳保留小数精度
                     timestamp_float = float(ego_states[i]['timestamp'])
-                    ego_state[EgoStateIndex.TIMESTAMP] = timestamp_float
+                    ego_state[EgoStateIndex.TIMESTAMP] = timestamp_float - time_ref
                     qw, qx, qy, qz = ego_states[i]['qw'], ego_states[i]['qx'], ego_states[i]['qy'], ego_states[i]['qz']
-                    yaw = np.arctan2(2 * (qw * qz + qx * qy), 1 - 2 * (qy * qy + qz * qz))
-                    ego_state[EgoStateIndex.YAW] = yaw_ref - yaw
+                    rot_prev_ego_to_global = quaternion2RotationMatix(qw, qx, qy, qz)
+                    t_prev_ego_to_global = torch.tensor([ego_states[i]['x'], ego_states[i]['y'], ego_states[i]['z']])
                     
-                    x_diff = x_ref - ego_states[i]['x']
-                    y_diff = y_ref - ego_states[i]['y']
-                    cos_val, sin_val = np.cos(yaw), np.sin(yaw)
-                    ego_state[EgoStateIndex.X] = x_diff * cos_val + y_diff * sin_val
-                    ego_state[EgoStateIndex.Y] = -x_diff * sin_val + y_diff * cos_val
+                    rot_ego_to_prev_ego = rot_prev_ego_to_global.transpose(0, 1) @ rot_ego_to_global
+                    t_ego_to_prev_ego = rot_prev_ego_to_global.transpose(0, 1) @ (t_ego_to_global - t_prev_ego_to_global)
+                    
+                    # calculate yaw, x, y from ego frame to previous ego frame
+                    yaw_rgo_to_prev_ego = np.arctan2(rot_ego_to_prev_ego[1, 0], rot_ego_to_prev_ego[0, 0])
+                    ego_state[EgoStateIndex.YAW] = yaw_rgo_to_prev_ego
+                    ego_state[EgoStateIndex.X] = t_ego_to_prev_ego[0]
+                    ego_state[EgoStateIndex.Y] = t_ego_to_prev_ego[1]
+
+                    # yaw = np.arctan2(2 * (qw * qz + qx * qy), 1 - 2 * (qy * qy + qz * qz))
+                    # ego_state[EgoStateIndex.YAW] = yaw_ref - yaw
+                    
+                    # x_diff = x_ref - ego_states[i]['x']
+                    # y_diff = y_ref - ego_states[i]['y']
+                    # cos_val, sin_val = np.cos(yaw), np.sin(yaw)
+                    # ego_state[EgoStateIndex.X] = x_diff * cos_val + y_diff * sin_val
+                    # ego_state[EgoStateIndex.Y] = -x_diff * sin_val + y_diff * cos_val
                     
                     # NOTE: the origin ego state is in first ego frame, but here we want to change the 
                     # relative ego state to the last ego frame. The question is: we have (x1, y1, yaw1) in ego1 frame1,
@@ -208,7 +230,6 @@ class MultiFrameDataset(Dataset):
                     # then frame1 to frame2 is (R2^T * R1, R2^T * (t1 - t2)) => (yaw1 - yaw2, xx, xx)
                     # here frame1 is the last ego frame, frame2 is the current ego frame we set the variable
                     
-                    # ego_state[EgoStateIndex.PITCH_CORRECTION] = float(ego_states[i]['pitch'])
                     ego_state[EgoStateIndex.PITCH_CORRECTION] = ego_states[i]['pitch']
                     # ego_state[EgoStateIndex.VX] = ego_states[i].get('speed', 0.0)
                     # ego_state[EgoStateIndex.VY] = ego_states[i].get('vy', 0.0)
