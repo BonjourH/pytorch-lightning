@@ -80,10 +80,10 @@ class DataConfig(ConfigBase):
     train_list: str = "train_clips.txt"
     val_list: str = "val_clips.txt"
     test_list: str = "test_list.txt"
-    sequence_length: int = 3
-    shuffle: bool = False
+    sequence_length: int = 8
+    shuffle: bool = True
     persistent_workers: bool = False
-    batch_size: int = 1
+    batch_size: int = 3
     num_workers: int = 20
     camera_ids: List[SourceCameraId] = field(default_factory=lambda: [
         SourceCameraId.FRONT_CENTER_CAMERA,
@@ -215,7 +215,7 @@ class LoggingConfig(ConfigBase):
     # for intermediate results
     visualize_intermediate_results: bool = True
     visualize_intermediate_results_dir: str = 'visualize_intermediate_results'
-    point_radius: int = 3
+    point_radius: int = 1 # muse be an odd number
     
 @dataclass
 class LossConfig(ConfigBase):

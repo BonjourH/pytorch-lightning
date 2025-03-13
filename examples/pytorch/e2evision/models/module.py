@@ -153,7 +153,7 @@ class E2EPerceptionModule(L.LightningModule):
             # "/pytorch/aten/src/ATen/native/cuda/Indexing.cu":548, please report a bug to PyTorch. number of flattened indices 
             # did not match number of elements in the value tensor: 15360 vs 9
 
-            debug = True
+            debug = False
             if debug:
                 cv2.imwrite('img2.png', cimg)
                 cv2.imshow('img', cimg)

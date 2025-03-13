@@ -142,6 +142,11 @@ class TrajParamIndex(IntEnum):
     
     def __int__(self):
         return self.value
+    
+    @classmethod
+    def object_type_to_index(cls, obj_type: str) -> int:
+        """Convert ObjectType to index."""
+        return cls[obj_type].value
 
 
 @dataclass

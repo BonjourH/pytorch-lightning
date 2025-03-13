@@ -122,7 +122,8 @@ class TrajectoryDecoder(nn.Module):
         
         # Sample points on unit cube for feature gathering
         # self.register_buffer('unit_points', self._generate_unit_cube_points(num_points)) # [P, 3]
-        self.register_buffer('unit_points', self._generate_bbox_corners_points()) # [3, 8]
+        # self.register_buffer('unit_points', self._generate_bbox_corners_points()) # [3, 8]
+        self.register_buffer('unit_points', self._sample_bbox_edge_points(1000, include_corners=True)) # [3, P] 
         self.register_buffer('origin_point', torch.zeros(1, 3)) # [1, 3]
         
         # Parameter ranges for normalization: torch.Tensor[TrajParamIndex.HEIGHT + 1, 2]
@@ -282,6 +283,62 @@ class TrajectoryDecoder(nn.Module):
             [-0.5, 0.5, 0.5], # rear left top
         ]).transpose(0, 1) # [3, 8]
         return corners
+
+    def _sample_bbox_edge_points(self, n_points_per_edge: int, include_corners: bool) -> torch.Tensor:
+        """
+        Sample points uniformly along each edge of a 3D bounding box.
+        
+        Args:
+            n_points_per_edge: Number of points to sample on each edge (excluding corners)
+            include_corners: Whether to include corner points in the output
+            
+        Returns:
+            Tensor containing sampled points on edges of the bounding box
+            shape: [3, P]
+        """
+        # Define the 8 corners of the bounding box
+        corners = torch.tensor([
+            [0.5, 0.5, -0.5],   # 0: front left bottom
+            [0.5, -0.5, -0.5],  # 1: front right bottom
+            [-0.5, -0.5, -0.5], # 2: rear right bottom
+            [-0.5, 0.5, -0.5],  # 3: rear left bottom
+            [0.5, 0.5, 0.5],    # 4: front left top
+            [0.5, -0.5, 0.5],   # 5: front right top
+            [-0.5, -0.5, 0.5],  # 6: rear right top
+            [-0.5, 0.5, 0.5],   # 7: rear left top
+        ])
+        
+        # Define the 12 edges by pairs of corner indices
+        edges = [
+            (0, 1), (1, 2), (2, 3), (3, 0),  # bottom face
+            (4, 5), (5, 6), (6, 7), (7, 4),  # top face
+            (0, 4), (1, 5), (2, 6), (3, 7)   # connecting edges
+        ]
+        
+        # List to collect all points
+        all_points = []
+        
+        # Handle corner points if requested
+        if include_corners:
+            all_points.append(corners)
+        
+        # Generate points along each edge
+        for i, j in edges:
+            # Get the start and end points of this edge
+            start, end = corners[i], corners[j]
+            
+            # Create evenly spaced points along the edge (excluding endpoints)
+            if n_points_per_edge > 0:
+                t = torch.linspace(0, 1, n_points_per_edge + 2)[1:-1]
+                
+                # Linear interpolation
+                points = start + t.unsqueeze(1) * (end - start)
+                all_points.append(points)
+        
+        points = torch.cat(all_points, dim=0).transpose(0, 1)
+        
+        # Combine all points into a single tensor (3, P)
+        return points
     
     def _get_motion_param_range(self)->torch.Tensor:
         """Get parameter ranges for normalization.

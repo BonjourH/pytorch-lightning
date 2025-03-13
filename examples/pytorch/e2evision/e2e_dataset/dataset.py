@@ -17,7 +17,7 @@ import numpy as np
 from utils.math_utils import quaternion2RotationMatix
 
 
-MAX_TRAJ_NB = 128
+MAX_TRAJ_NB = 32
 
 class TrainingSample:
     """Container for multi-frame training data."""
@@ -202,6 +202,7 @@ class MultiFrameDataset(Dataset):
                     qw, qx, qy, qz = ego_states[i]['qw'], ego_states[i]['qx'], ego_states[i]['qy'], ego_states[i]['qz']
                     rot_prev_ego_to_global = quaternion2RotationMatix(qw, qx, qy, qz)
                     t_prev_ego_to_global = torch.tensor([ego_states[i]['x'], ego_states[i]['y'], ego_states[i]['z']])
+                    t_prev_ego_to_global = t_prev_ego_to_global.to(rot_prev_ego_to_global.dtype)
                     
                     rot_ego_to_prev_ego = rot_prev_ego_to_global.transpose(0, 1) @ rot_ego_to_global
                     t_ego_to_prev_ego = rot_prev_ego_to_global.transpose(0, 1) @ (t_ego_to_global - t_prev_ego_to_global)
@@ -261,7 +262,7 @@ class MultiFrameDataset(Dataset):
                             traj[TrajParamIndex.STATIC] = obj_data.get('static', 0.0)
                             traj[TrajParamIndex.OCCLUDED] = obj_data.get('occluded', 0.0)
                             # object type
-                            traj[ObjectType[obj_data.get('type', 'UNKNOWN')]] = 1.0
+                            traj[TrajParamIndex.object_type_to_index(obj_data.get('type', 'UNKNOWN'))] = 1.0
                             
                             trajs.append(traj)
                         assert len(trajs) <= MAX_TRAJ_NB, f"Number of trajectories exceeds MAX_TRAJ_NB: {len(trajs)}"
@@ -418,10 +419,8 @@ if __name__ == '__main__':
             print(f"  Object type: {tensor_to_object_type(first_traj)}")
         
         print("\nCalibration info:")
-        for camera_id, calib in batch['calibrations'].items():
-            print(f"\nCamera {camera_id.name}:")
-            print(f"  Camera parameters shape: {calib.shape}")
-            print(f"  Camera type: {CameraType(int(calib[0, CameraParamIndex.CAMERA_TYPE].item()))}")
+        calib =  batch['calibrations'][0]
+        print(f"  Camera parameters shape: {calib.shape}")
         
         # Only process one batch
         break
