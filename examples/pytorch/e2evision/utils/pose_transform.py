@@ -181,8 +181,16 @@ def camera_to_pixel(cam_points: torch.Tensor, calib_params: torch.Tensor, normal
     fisheye_theta_d = fisheye_theta * (1 + k1 * fisheye_theta2 + k2 * fisheye_theta4 + k3 * fisheye_theta6 + k4 * fisheye_theta8)
     scaling = torch.where(fisheye_r > 0, fisheye_theta_d / fisheye_r, torch.ones_like(fisheye_r))
     
+    # calculate the derivation of the distorted radius to filter the folded pixels
+    # distorted_theta = theta * (1 + k1 * theta^2 + k2 * theta^4 + k3 * theta^6 + k4 * theta^8)
+    # d(distorted_theta) / d(theta) = 1 + 3 * k1 * theta^2 + 5 * k2 * theta^4 + 7 * k3 * theta^6 + 9 * k4 * theta^8
+    fisheye_derivation = 1 + 3 * k1 * fisheye_theta2 + 5 * k2 * fisheye_theta4 + 7 * k3 * fisheye_theta6 + 9 * k4 * fisheye_theta8
+    folded_fisheye_pixel_mask = (fisheye_derivation < 0)
+    
     x_distorted_fisheye = x_normalized * scaling
     y_distorted_fisheye = y_normalized * scaling
+    x_distorted_fisheye[folded_fisheye_pixel_mask] = -1.0 # -1 is the invalid pixel
+    y_distorted_fisheye[folded_fisheye_pixel_mask] = -1.0 # -1 is the invalid pixel
     
     # calculate general distorted coordinates
     general_r2 = x_normalized * x_normalized + y_normalized * y_normalized
@@ -191,11 +199,18 @@ def camera_to_pixel(cam_points: torch.Tensor, calib_params: torch.Tensor, normal
     
     radial = 1 + k1 * general_r2 + k2 * general_r4 + k3 * general_r6
     
+    # the distorted radius is r * (1 + k1 * r^2 + k2 * r^4 + k3 * r^6)
+    # the derivation of the distorted radius is 1 + 3 * k1 * r^2 + 5 * k2 * r^4 + 7 * k3 * r^6
+    distorted_r_derivation = 1 + 3 * k1 * general_r2 + 5 * k2 * general_r4 + 7 * k3 * general_r6
+    folded_general_pixel_mask = (distorted_r_derivation < 0)
+    
     dx = 2 * p1 * x_normalized * y_normalized + p2 * (general_r2 + 2 * x_normalized * x_normalized)
     dy = p1 * (general_r2 + 2 * y_normalized * y_normalized) + 2 * p2 * x_normalized * y_normalized
     
     x_distorted_general = x_normalized * radial + dx
     y_distorted_general = y_normalized * radial + dy
+    x_distorted_general[folded_general_pixel_mask] = -1.0 # -1 is the invalid pixel
+    y_distorted_general[folded_general_pixel_mask] = -1.0 # -1 is the invalid pixel
     
     # calculate pinhole distorted coordinates
     # no need to calculate
