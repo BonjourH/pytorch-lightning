@@ -83,7 +83,7 @@ class DataConfig(ConfigBase):
     sequence_length: int = 8
     shuffle: bool = True
     persistent_workers: bool = False
-    batch_size: int = 3
+    batch_size: int = 5
     num_workers: int = 20
     camera_ids: List[SourceCameraId] = field(default_factory=lambda: [
         SourceCameraId.FRONT_CENTER_CAMERA,
