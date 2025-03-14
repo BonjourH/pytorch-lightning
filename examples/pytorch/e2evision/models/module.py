@@ -14,6 +14,7 @@ from models.loss import TrajectoryLoss
 from configs.config import Config
 from e2e_dataset.dataset import TrainingSample
 from utils.pose_transform import project_points_to_image
+from utils.math_utils import generate_unit_cube_points, generate_bbox_corners_points, sample_bbox_edge_points
 
 class E2EPerceptionModule(L.LightningModule):
     """Lightning module for end-to-end perception."""
@@ -33,6 +34,10 @@ class E2EPerceptionModule(L.LightningModule):
         
         # Initialize predict metrics
         self.predict_step_outputs = []
+        
+        # for visualization debug
+        if self.config.logging.visualize_intermediate_results:
+            self.register_buffer('bbox_edge_points', sample_bbox_edge_points(1000))
         
     def forward(self, batch: Dict) -> List[Dict]:
         return self.net(batch)
@@ -93,7 +98,7 @@ class E2EPerceptionModule(L.LightningModule):
             concat_imgs: Dict[SourceCameraId, np.ndarray]
         """
         
-        pixels, _ = project_points_to_image(trajs, calibrations, ego_states, self.net.decoder.unit_points)
+        pixels, _ = project_points_to_image(trajs, calibrations, ego_states, self.bbox_edge_points)
         B, C, N, T, P, _ = pixels.shape # [B, C, N, T, P, 2]
         
         # disable pixels of false positive trajectories

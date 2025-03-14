@@ -247,7 +247,8 @@ def camera_to_pixel(cam_points: torch.Tensor, calib_params: torch.Tensor, normal
 def project_points_to_image(trajs: torch.Tensor, 
                             calibrations: torch.Tensor, 
                             ego_states: torch.Tensor,
-                            unit_points: torch.Tensor) -> torch.Tensor:
+                            unit_points: torch.Tensor,
+                            normalize: bool = True) -> torch.Tensor:
     """
     Project points to image.
     Args:
@@ -292,7 +293,7 @@ def project_points_to_image(trajs: torch.Tensor,
     # in matrix multiplication, the cam_points is float16, but the calibrations is float32
     # so we need to cast the cam_points to float32
     
-    pixels, behind_camera = camera_to_pixel(cam_points, calibrations)
+    pixels, behind_camera = camera_to_pixel(cam_points, calibrations, normalize)
     return pixels, behind_camera
 
 

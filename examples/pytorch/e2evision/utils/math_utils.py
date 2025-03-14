@@ -20,3 +20,122 @@ def quaternion2RotationMatix(qw, qx, qy, qz) -> torch.Tensor:
     return torch.tensor([[1 - 2 * (qy * qy + qz * qz), 2 * (qx * qy - qz * qw), 2 * (qx * qz + qy * qw)],
                         [2 * (qx * qy + qz * qw), 1 - 2 * (qx * qx + qz * qz), 2 * (qy * qz - qx * qw)],
                         [2 * (qx * qz - qy * qw), 2 * (qy * qz + qx * qw), 1 - 2 * (qx * qx + qy * qy)]])
+
+def generate_unit_cube_points(num_points: int = 25):
+    """Generate sample points on faces of unit cube.
+    
+    Args:
+        num_points: Number of points to sample on each face
+        
+    Returns:
+        Tensor of shape [3, num_points*6 + 1] containing sampled points
+    """
+    points = []
+    points_per_face = int(np.sqrt(num_points))  # e.g., 5 for 25 points per face
+    
+    # Sample points on each face
+    for dim in range(3):  # x, y, z
+        for sign in [-1, 1]:  # negative and positive faces
+            # Create grid on face
+            if dim == 0:  # yz plane
+                y = torch.linspace(-1, 1, points_per_face)
+                z = torch.linspace(-1, 1, points_per_face)
+                grid_y, grid_z = torch.meshgrid(y, z, indexing='ij')
+                x = torch.full_like(grid_y, sign)
+                points.append(torch.stack([x, grid_y, grid_z], dim=-1))
+                
+            elif dim == 1:  # xz plane
+                x = torch.linspace(-1, 1, points_per_face)
+                z = torch.linspace(-1, 1, points_per_face)
+                grid_x, grid_z = torch.meshgrid(x, z, indexing='ij')
+                y = torch.full_like(grid_x, sign)
+                points.append(torch.stack([grid_x, y, grid_z], dim=-1))
+                
+            else:  # xy plane
+                x = torch.linspace(-1, 1, points_per_face)
+                y = torch.linspace(-1, 1, points_per_face)
+                grid_x, grid_y = torch.meshgrid(x, y, indexing='ij')
+                z = torch.full_like(grid_x, sign)
+                points.append(torch.stack([grid_x, grid_y, z], dim=-1))
+    
+    points = torch.cat([p.reshape(-1, 3) for p in points], dim=0)
+    # add origin point
+    points = torch.cat([torch.zeros(1, 3), points], dim=0)
+    points = points.transpose(0, 1) # [3, P]
+    points /= 2.0
+    return points
+
+
+def generate_bbox_corners_points() -> torch.Tensor:
+    """Generate sample points on corners of 3D bounding box.
+    
+    Returns:
+        Tensor of shape [8, 3] containing sampled points
+    """
+    corners = torch.tensor([
+        [0.5, 0.5, -0.5], # front left bottom
+        [0.5, -0.5, -0.5], # front right bottom
+        [-0.5, -0.5, -0.5], # rear right bottom
+        [-0.5, 0.5, -0.5], # rear left bottom
+        [0.5, 0.5, 0.5], # front left top
+        [0.5, -0.5, 0.5], # front right top
+        [-0.5, -0.5, 0.5], # rear right top
+        [-0.5, 0.5, 0.5], # rear left top
+    ]).transpose(0, 1) # [3, 8]
+    return corners
+
+def sample_bbox_edge_points(n_points_per_edge: int, include_corners: bool=True) -> torch.Tensor:
+    """
+    Sample points uniformly along each edge of a 3D bounding box.
+    
+    Args:
+        n_points_per_edge: Number of points to sample on each edge (excluding corners)
+        include_corners: Whether to include corner points in the output
+        
+    Returns:
+        Tensor containing sampled points on edges of the bounding box
+        shape: [3, P]
+    """
+    # Define the 8 corners of the bounding box
+    corners = torch.tensor([
+        [0.5, 0.5, -0.5],   # 0: front left bottom
+        [0.5, -0.5, -0.5],  # 1: front right bottom
+        [-0.5, -0.5, -0.5], # 2: rear right bottom
+        [-0.5, 0.5, -0.5],  # 3: rear left bottom
+        [0.5, 0.5, 0.5],    # 4: front left top
+        [0.5, -0.5, 0.5],   # 5: front right top
+        [-0.5, -0.5, 0.5],  # 6: rear right top
+        [-0.5, 0.5, 0.5],   # 7: rear left top
+    ])
+    
+    # Define the 12 edges by pairs of corner indices
+    edges = [
+        (0, 1), (1, 2), (2, 3), (3, 0),  # bottom face
+        (4, 5), (5, 6), (6, 7), (7, 4),  # top face
+        (0, 4), (1, 5), (2, 6), (3, 7)   # connecting edges
+    ]
+    
+    # List to collect all points
+    all_points = []
+    
+    # Handle corner points if requested
+    if include_corners:
+        all_points.append(corners)
+    
+    # Generate points along each edge
+    for i, j in edges:
+        # Get the start and end points of this edge
+        start, end = corners[i], corners[j]
+        
+        # Create evenly spaced points along the edge (excluding endpoints)
+        if n_points_per_edge > 0:
+            t = torch.linspace(0, 1, n_points_per_edge + 2)[1:-1]
+            
+            # Linear interpolation
+            points = start + t.unsqueeze(1) * (end - start)
+            all_points.append(points)
+    
+    points = torch.cat(all_points, dim=0).transpose(0, 1)
+    
+    # Combine all points into a single tensor (3, P)
+    return points

@@ -105,6 +105,7 @@ class DecoderConfig(ConfigBase):
     """Decoder configuration"""
     num_layers: int = 3
     num_queries: int = 128
+    query_dim: int = 256
     feature_dim: int = 256
     hidden_dim: int = 512
     num_points: int = 25

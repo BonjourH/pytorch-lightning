@@ -5,7 +5,7 @@ import numpy as np
 import torch.utils.checkpoint as checkpoint
 
 from base import SourceCameraId, TrajParamIndex, ObjectType, CameraParamIndex, EgoStateIndex
-from .components import TrajectoryDecoder
+from .trajectory_decoder import TrajectoryDecoder
 from .temporal_fusion_layer import TemporalFusionFactory
 from .image_feature_extractor import FPNImageFeatureExtractor
 from configs.config import ModelConfig, DataConfig
@@ -37,6 +37,7 @@ class E2EPerceptionNet(nn.Module):
         self.decoder = TrajectoryDecoder(model_config.decoder.num_layers,
                                         model_config.decoder.num_queries,
                                         model_config.decoder.feature_dim,
+                                        model_config.decoder.query_dim,
                                         model_config.decoder.hidden_dim,
                                         model_config.decoder.num_points)
         
