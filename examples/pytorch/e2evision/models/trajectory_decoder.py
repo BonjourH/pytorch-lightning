@@ -9,6 +9,7 @@ from timm.models import create_model
 from base import SourceCameraId, TrajParamIndex, CameraParamIndex, EgoStateIndex, CameraType
 from utils.math_utils import generate_bbox_corners_points
 from utils.pose_transform import project_points_to_image
+from e2e_dataset.dataset import MAX_TRAJ_NB
 
 
 class TrajectoryDACTransformerLayer(nn.Module):
@@ -101,6 +102,8 @@ class TrajectoryDecoder(nn.Module):
         super().__init__()
         self.num_queries = num_queries
         self.query_dim = query_dim
+        
+        assert num_queries <= MAX_TRAJ_NB, f"num_queries must be less than {MAX_TRAJ_NB}"
         
         # Object queries
         self.pos_embeddings = nn.Embedding(num_queries, query_dim)
@@ -238,10 +241,11 @@ class TrajectoryDecoder(nn.Module):
         init_trajs, o_features, o_feature_pos = self._sample_features_by_queries(pos_queries, features_dict, calibrations, ego_states)
         c_features, c_feature_pos = o_features, o_feature_pos
         
-        o_decoder_outputs, c_decoder_outputs = [], [] # o: standard decoder, c: cross-attention decoder
+        o_decoder_outputs, c_decoder_outputs = [init_trajs], [init_trajs] # o: standard decoder, c: cross-attention decoder
         o_tgt = torch.zeros(B, self.num_queries, self.query_dim)
         c_tgt = torch.zeros(B, self.num_queries, self.query_dim)
         for layer in self.layers:
+            break
             # 1. update query by transformer layer(standard)
             o_tgt = layer(o_tgt, o_features, pos_queries, o_feature_pos)
             # 2. update query by transformer layer(without self-attention)
@@ -252,5 +256,5 @@ class TrajectoryDecoder(nn.Module):
             o_decoder_outputs.append(o_trajs)
             c_decoder_outputs.append(c_trajs)
             
-        return init_trajs, o_decoder_outputs, c_decoder_outputs
+        return  o_decoder_outputs, c_decoder_outputs
         

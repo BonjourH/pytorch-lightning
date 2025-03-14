@@ -141,7 +141,7 @@ class TrainingConfig(ConfigBase):
     use_checkpoint: bool = True
     log_every_n_steps: int = 30
     check_val_every_n_epoch: int = 5
-    num_sanity_val_steps: int = 0 # 0: no sanity check, 1: check 1 batch, -1: check all batches
+    num_sanity_val_steps: int = 1 # 0: no sanity check, 1: check 1 batch, -1: check all batches
 
 @dataclass
 class InferenceConfig(ConfigBase):
@@ -214,7 +214,7 @@ class LoggingConfig(ConfigBase):
         'train/layer_1_fp_loss_exist_epoch'
     ])
     # for intermediate results
-    visualize_intermediate_results: bool = True
+    visualize_intermediate_results: bool = False
     visualize_intermediate_results_dir: str = 'visualize_intermediate_results'
     point_radius: int = 1 # muse be an odd number
     

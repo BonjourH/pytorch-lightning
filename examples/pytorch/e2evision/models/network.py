@@ -9,6 +9,7 @@ from .trajectory_decoder import TrajectoryDecoder
 from .temporal_fusion_layer import TemporalFusionFactory
 from .image_feature_extractor import FPNImageFeatureExtractor
 from configs.config import ModelConfig, DataConfig
+from .dynamic_tanh import convert_ln_to_dyt
 
     
 class E2EPerceptionNet(nn.Module):

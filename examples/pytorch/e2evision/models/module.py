@@ -195,14 +195,14 @@ class E2EPerceptionModule(L.LightningModule):
     def training_step(self, batch: Dict, batch_idx: int) -> Dict:
         """Training step."""
         # # Forward pass
-        # outputs = self(batch)
+        outputs, _ = self(batch)
         
         # # Compute loss
-        # loss_dict = self.criterion(outputs, batch)
+        loss_dict = self.criterion(outputs, batch['trajs'])
         
         # # Log losses
-        # for name, value in loss_dict.items():
-        #     self.log(f"train/{name}", value, on_step=True, on_epoch=True, prog_bar=True)
+        for name, value in loss_dict.items():
+            self.log(f"train/{name}", value, on_step=True, on_epoch=True, prog_bar=True)
             
         if self.config.logging.visualize_intermediate_results:
             print(f'Begin to visualize gt and pred trajs for training step {batch_idx}')
@@ -230,16 +230,15 @@ class E2EPerceptionModule(L.LightningModule):
                 img_name = f'{camera_id.name}_{batch_idx}.png'
                 cv2.imwrite(os.path.join(save_dir, img_name), concat_imgs[camera_id])
 
-        exit(0)
         return loss_dict
     
     def validation_step(self, batch: Dict, batch_idx: int) -> Dict:
         """Validation step."""
         # Forward pass
-        outputs = self(batch)
+        outputs, _ = self(batch)
         
         # Compute loss
-        loss_dict = self.criterion(outputs, batch)
+        loss_dict = self.criterion(outputs, batch['trajs'])
         
         # Store outputs for epoch end
         self.val_step_outputs.append({
@@ -308,7 +307,7 @@ class E2EPerceptionModule(L.LightningModule):
     
     def predict_step(self, batch: Dict, batch_idx: int, dataloader_idx: int = 0) -> Dict:
         """Prediction step."""
-        outputs = self(batch)
+        outputs, _ = self(batch)
         self.predict_step_outputs.append(outputs)
         return outputs
     

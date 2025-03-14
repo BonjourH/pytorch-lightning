@@ -278,17 +278,21 @@ class TrajectoryLoss(nn.Module):
         self.config = config
         self.weight_dict = config.weight_dict
     
-    def forward(self, outputs: List[torch.Tensor], targets: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        """Forward pass to compute losses."""
-        losses = {}
+    def forward(self, outputs: List[torch.Tensor], gt_trajs: torch.Tensor) -> Dict[str, torch.Tensor]:
+        """
+        Forward pass to compute losses.
         
+        Args:
+            outputs: List of predicted trajectories [B, N, TrajParamIndex.END_OF_INDEX]
+            gt_trajs: Ground truth trajectories [B, M, TrajParamIndex.END_OF_INDEX]
+        """
+        losses = {}
         # Process each decoder layer
         num_layers = len(outputs)
         
         # 只在最后一层进行匹配，获取匹配索引
         final_layer_idx = num_layers - 1
         final_pred_trajs = outputs[final_layer_idx]  # [B, N, TrajParamIndex.END_OF_INDEX]
-        gt_trajs = targets['trajs']  # [B, M, TrajParamIndex.END_OF_INDEX]
         
         # 计算最后一层的匹配结果
         indices_list = []
@@ -306,7 +310,7 @@ class TrajectoryLoss(nn.Module):
             indices_list.append(indices)
         
         # 使用相同的匹配结果计算每一层的损失
-        for idx, pred_trajs in enumerate(outputs[1:]):
+        for idx, pred_trajs in enumerate(outputs):
             # 使用最后一层的匹配结果计算当前层的损失
             layer_losses = self._compute_losses_with_indices(
                 pred_trajs=pred_trajs,

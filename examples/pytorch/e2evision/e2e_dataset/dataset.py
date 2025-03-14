@@ -17,7 +17,7 @@ import numpy as np
 from utils.math_utils import quaternion2RotationMatix
 
 
-MAX_TRAJ_NB = 32
+MAX_TRAJ_NB = 100
 
 class TrainingSample:
     """Container for multi-frame training data."""
