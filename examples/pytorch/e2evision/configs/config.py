@@ -80,8 +80,8 @@ class DataConfig(ConfigBase):
     train_list: str = "train_clips.txt"
     val_list: str = "val_clips.txt"
     test_list: str = "test_list.txt"
-    sequence_length: int = 8
-    shuffle: bool = True
+    sequence_length: int = 1
+    shuffle: bool = False
     persistent_workers: bool = False
     batch_size: int = 5
     num_workers: int = 20
@@ -140,7 +140,7 @@ class TrainingConfig(ConfigBase):
     gradient_clip_val: float = 1.0
     use_checkpoint: bool = True
     log_every_n_steps: int = 30
-    check_val_every_n_epoch: int = 5
+    check_val_every_n_epoch: int = 10000 # 0: no validation, 1: validate every epoch, 10: validate every 10 epochs
     num_sanity_val_steps: int = 1 # 0: no sanity check, 1: check 1 batch, -1: check all batches
 
 @dataclass
@@ -214,6 +214,7 @@ class LoggingConfig(ConfigBase):
         'train/layer_1_fp_loss_exist_epoch'
     ])
     # for intermediate results
+    with_checkpoint_copy_callback: bool = False
     visualize_intermediate_results: bool = False
     visualize_intermediate_results_dir: str = 'visualize_intermediate_results'
     point_radius: int = 1 # muse be an odd number

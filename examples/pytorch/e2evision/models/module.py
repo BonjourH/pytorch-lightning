@@ -52,30 +52,39 @@ class E2EPerceptionModule(L.LightningModule):
         )
         
         # Create scheduler
-        # scheduler = OneCycleLR(
+        scheduler = OneCycleLR(
+            optimizer,
+            max_lr=self.config.training.learning_rate,
+            epochs=self.config.training.max_epochs,
+            steps_per_epoch=self.trainer.estimated_stepping_batches // self.config.training.max_epochs,
+            pct_start=self.config.training.pct_start,
+            div_factor=self.config.training.div_factor,
+            final_div_factor=self.config.training.final_div_factor,
+            three_phase=True
+        )
+        
+        onc_cycle_config = {
+            "scheduler": scheduler,
+            "interval": "step",  # OneCycleLR is updated every step
+            "frequency": 1
+        }
+        
+        # scheduler = CosineAnnealingLR(
         #     optimizer,
-        #     max_lr=self.config.training.learning_rate,
-        #     total_steps=self.config.training.max_epochs,
-        #     pct_start=self.config.training.pct_start,
-        #     div_factor=self.config.training.div_factor,
-        #     final_div_factor=self.config.training.final_div_factor,
-        #     three_phase=True
+        #     T_max=self.config.training.max_epochs,
+        #     eta_min=1e-6
         # )
         
-        scheduler = CosineAnnealingLR(
-            optimizer,
-            T_max=self.config.training.max_epochs,
-            eta_min=1e-6
-        )
+        # cosine annealing_config = {
+        #     "optimizer": optimizer,
+        #     #monitor="val/loss",
+        #     "interval": "epoch",
+        #     "frequency": 1
+        # }
         
         return {
             "optimizer": optimizer,
-            "lr_scheduler": {
-                "scheduler": scheduler,
-                "monitor": "val/loss",
-                "interval": "epoch",
-                "frequency": 1
-            }
+            "lr_scheduler": onc_cycle_config
         }
     
     def _render_trajs_on_imgs(self, 

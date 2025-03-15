@@ -189,7 +189,7 @@ def main():
     ]
     
     # 添加自定义 checkpoint 复制回调
-    if hasattr(config.logging, 'last_checkpoint_dir') and config.logging.last_checkpoint_dir:
+    if hasattr(config.logging, 'last_checkpoint_dir') and config.logging.last_checkpoint_dir and config.logging.with_checkpoint_copy_callback:
         copy_callback = CheckpointCopyCallback(
             src_dir=config.logging.checkpoint_dir,
             dst_dir=config.logging.last_checkpoint_dir
