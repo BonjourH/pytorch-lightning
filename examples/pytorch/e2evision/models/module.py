@@ -21,7 +21,7 @@ class E2EPerceptionModule(L.LightningModule):
     
     def __init__(self, config: Config):
         super().__init__()
-        self.save_hyperparameters(ignore=['config'])
+        self.save_hyperparameters()
         self.config = config
         # Create network
         self.net = E2EPerceptionNet(config.model, config.data, config.training.use_checkpoint)
@@ -52,39 +52,41 @@ class E2EPerceptionModule(L.LightningModule):
         )
         
         # Create scheduler
-        scheduler = OneCycleLR(
-            optimizer,
-            max_lr=self.config.training.learning_rate,
-            epochs=self.config.training.max_epochs,
-            steps_per_epoch=self.trainer.estimated_stepping_batches // self.config.training.max_epochs,
-            pct_start=self.config.training.pct_start,
-            div_factor=self.config.training.div_factor,
-            final_div_factor=self.config.training.final_div_factor,
-            three_phase=True
-        )
-        
-        onc_cycle_config = {
-            "scheduler": scheduler,
-            "interval": "step",  # OneCycleLR is updated every step
-            "frequency": 1
-        }
-        
-        # scheduler = CosineAnnealingLR(
-        #     optimizer,
-        #     T_max=self.config.training.max_epochs,
-        #     eta_min=1e-6
-        # )
-        
-        # cosine annealing_config = {
-        #     "optimizer": optimizer,
-        #     #monitor="val/loss",
-        #     "interval": "epoch",
-        #     "frequency": 1
-        # }
+        if self.config.training.lr_scheduler == 'cosine':
+            scheduler = CosineAnnealingLR(
+                optimizer,
+                T_max=self.config.training.max_epochs,
+                eta_min=1e-6
+            )
+            lr_scheduler_config = {
+                "scheduler": scheduler,
+                "interval": "epoch",
+                "monitor": "val/loss",
+                "frequency": 1
+            }
+        elif self.config.training.lr_scheduler == 'one_cycle':
+            scheduler = OneCycleLR(
+                optimizer,
+                max_lr=self.config.training.learning_rate,
+                epochs=self.config.training.max_epochs,
+                steps_per_epoch=self.trainer.estimated_stepping_batches // self.config.training.max_epochs,
+                pct_start=self.config.training.pct_start,
+                div_factor=self.config.training.div_factor,
+                final_div_factor=self.config.training.final_div_factor,
+                three_phase=True
+            )
+            
+            lr_scheduler_config = {
+                "scheduler": scheduler,
+                "interval": "step",  # OneCycleLR is updated every step
+                "frequency": 1
+            }
+        else:
+            raise ValueError(f"Invalid learning rate scheduler: {self.config.training.lr_scheduler}")
         
         return {
             "optimizer": optimizer,
-            "lr_scheduler": onc_cycle_config
+            "lr_scheduler": lr_scheduler_config
         }
     
     def _render_trajs_on_imgs(self, 

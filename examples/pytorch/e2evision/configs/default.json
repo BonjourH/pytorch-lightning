@@ -103,7 +103,7 @@
       "decoder": {
         "num_layers": 3,
         "num_queries": 64,
-        "query_dim": 256,
+        "query_dim": 128,
         "feature_dim": 256,
         "hidden_dim": 512,
         "num_points": 25
@@ -115,7 +115,7 @@
       "val_list": "val_clips.txt",
       "batch_size": 1,
       "num_workers": 20,
-      "max_epochs": 5000000,
+      "max_epochs": 100,
       "accelerator": "gpu",
       "devices": 1,
       "precision": 32,
@@ -132,8 +132,10 @@
       "gradient_clip_val": 1.0,
       "use_checkpoint": true,
       "log_every_n_steps": 30,
-      "check_val_every_n_epoch": 10000,
-      "num_sanity_val_steps": 1
+      "check_val_every_n_epoch": 10,
+      "num_sanity_val_steps": 1,
+      "resume": true,
+      "lr_scheduler": "cosine"
     },
     "predict": {
       "test_list": "test_list.txt",

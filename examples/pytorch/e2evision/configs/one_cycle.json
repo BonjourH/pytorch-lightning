@@ -102,8 +102,8 @@
     "model": {
       "decoder": {
         "num_layers": 3,
-        "num_queries": 16,
-        "query_dim": 256,
+        "num_queries": 64,
+        "query_dim": 128,
         "feature_dim": 256,
         "hidden_dim": 512,
         "num_points": 25
@@ -133,7 +133,9 @@
       "use_checkpoint": true,
       "log_every_n_steps": 30,
       "check_val_every_n_epoch": 10,
-      "num_sanity_val_steps": 1
+      "num_sanity_val_steps": 1,
+      "resume": false,
+      "lr_scheduler": "one_cycle"
     },
     "predict": {
       "test_list": "test_list.txt",

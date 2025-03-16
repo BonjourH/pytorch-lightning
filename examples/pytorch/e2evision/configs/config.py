@@ -143,6 +143,9 @@ class TrainingConfig(ConfigBase):
     log_every_n_steps: int = 30
     check_val_every_n_epoch: int = 10000 # 0: no validation, 1: validate every epoch, 10: validate every 10 epochs
     num_sanity_val_steps: int = 1 # 0: no sanity check, 1: check 1 batch, -1: check all batches
+    resume: bool = False
+    # learning rate scheduler
+    lr_scheduler: str = 'cosine' # 'one_cycle', 'cosine'
 
 @dataclass
 class InferenceConfig(ConfigBase):

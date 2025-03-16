@@ -15,14 +15,13 @@ NUM_WORKERS=${NUM_WORKERS:-20} # 默认减少工作线程数为4
 ACCELERATOR=${ACCELERATOR:-"gpu"}
 DEVICES=${DEVICES:-1}
 PRECISION=${PRECISION:-32} # 16-mixed, 32, 64
-RESUME=${RESUME:-0}
 PRETRAINED_WEIGHTS=${PRETRAINED_WEIGHTS:-"true"}
 RUN_ID=${RUN_ID:-0}
-CONFIG_FILE=${CONFIG_FILE:-"configs/one_cycle.json"}
+CONFIG_FILE=${CONFIG_FILE:-"configs/one_cycle.json"} # one_cycle.json, default.json
 VALIDATE_ONLY=${VALIDATE_ONLY:-0}             # 0: train and validate, 1: validate only
 LIMIT_VAL_BATCHES=${LIMIT_VAL_BATCHES:-1}     # 1.0: validate all batches, 0.1: validate 10% of batches, 1: one batch
 MEMORY_EFFICIENT=${MEMORY_EFFICIENT:-1}       # 添加内存效率选项
-CLEAN_WANDB_HISTORY=${CLEAN_WANDB_HISTORY:-1} # 是否清理 W&B 历史数据，1: 清理, 0: 不清理
+CLEAN_WANDB_HISTORY=${CLEAN_WANDB_HISTORY:-0} # 是否清理 W&B 历史数据，1: 清理, 0: 不清理
 # Create log directory
 LOG_DIR="logs/${EXP_NAME}"
 CHECKPOINT_DIR="checkpoints/${EXP_NAME}"
@@ -56,7 +55,6 @@ LOG_FILE="${LOG_DIR}/${EXP_NAME}.log"
     echo "  Accelerator: ${ACCELERATOR}"
     echo "  Devices: ${DEVICES}"
     echo "  Precision: ${PRECISION}"
-    echo "  Resume: ${RESUME}"
 
     # Set visible GPUs
     export CUDA_VISIBLE_DEVICES=0
@@ -76,7 +74,6 @@ LOG_FILE="${LOG_DIR}/${EXP_NAME}.log"
     TRAIN_CMD="python train.py"
     TRAIN_CMD="${TRAIN_CMD} --config_file ${CONFIG_FILE}"
     TRAIN_CMD="${TRAIN_CMD} --experiment_name ${EXP_NAME}"
-    TRAIN_CMD="${TRAIN_CMD} --resume ${RESUME}"
 
     # Create config override array
     CONFIG_OVERRIDES=()
