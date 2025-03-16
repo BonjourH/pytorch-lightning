@@ -220,7 +220,7 @@ class E2EPerceptionModule(L.LightningModule):
         print("Visualizing matching history...")
         
         # 获取匹配历史记录
-        matching_history = self.criterion.get_matching_history()
+        matching_history = self.criterion.matching_history
         
         if not matching_history:
             print("No matching history to visualize.")
@@ -230,86 +230,94 @@ class E2EPerceptionModule(L.LightningModule):
         vis_dir = os.path.join(self.config.logging.log_dir, "matching_visualization")
         os.makedirs(vis_dir, exist_ok=True)
         
-        # 对每个batch样本分别可视化
-        num_batches = len(list(matching_history.values())[0])
-        for batch_idx in range(num_batches):
-            # 收集该batch样本随时间变化的匹配结果
-            gt_to_pred_matches = {}
+        # matching_history的结构是 Dict[int, List[Tuple[int, int]]]
+        # 键是layer_idx，值是(pred_idx, gt_idx)匹配对列表
+        # 注意：pred_idx和gt_idx可能是numpy数组而不是简单的整数
+        
+        # 首先保存原始匹配历史数据为CSV和JSON格式
+        for layer_idx, matches in matching_history.items():
+            # 保存为CSV
+            csv_path = os.path.join(vis_dir, f'layer_{layer_idx}_matches.csv')
+            with open(csv_path, 'w') as f:
+                f.write("step,pred_idx,gt_idx\n")
+                for step, match_pair in enumerate(matches):
+                    pred_idx, gt_idx = match_pair
+                    f.write(f"{step},{pred_idx},{gt_idx}\n")
             
-            for step, indices_list in matching_history.items():
-                if batch_idx < len(indices_list):
-                    pred_indices, gt_indices = indices_list[batch_idx]
+            # 保存为JSON
+            json_path = os.path.join(vis_dir, f'layer_{layer_idx}_matches.json')
+            with open(json_path, 'w') as f:
+                serializable_matches = []
+                for match_pair in matches:
+                    pred_idx, gt_idx = match_pair
+                    # 处理numpy数组 - 转换为列表
+                    if hasattr(pred_idx, 'tolist'):
+                        pred_idx = pred_idx.tolist()
+                    if hasattr(gt_idx, 'tolist'):
+                        gt_idx = gt_idx.tolist()
+                    serializable_matches.append([pred_idx, gt_idx])
+                json.dump(serializable_matches, f, indent=2)
+        
+        # 获取所有层索引
+        layer_indices = sorted(matching_history.keys())
+        print(f"Found data for {len(layer_indices)} decoder layers")
+        
+        # 对每个层创建折线图可视化
+        for layer_idx in layer_indices:
+            # 获取该层的所有匹配记录
+            matches = matching_history[layer_idx]
+            print(f"Layer {layer_idx}: Found {len(matches)} match records")
+            
+            # 创建折线图
+            plt.figure(figsize=(14, 8))
+            
+            # 收集每个GT索引的匹配信息
+            gt_to_query_over_time = {}
+            
+            for step, (pred_idx, gt_idx) in enumerate(matches):
+                gt_idx = gt_idx.tolist()
+                pred_idx = pred_idx.tolist()
+                for gt_idx_i, pred_idx_i in zip(gt_idx, pred_idx):
+                    # 将匹配添加到对应GT的历史记录中
+                    if gt_idx_i not in gt_to_query_over_time:
+                        gt_to_query_over_time[gt_idx_i] = []
                     
-                    # 对每个gt目标，记录其匹配的预测索引
-                    for i, gt_idx in enumerate(gt_indices):
-                        if gt_idx not in gt_to_pred_matches:
-                            gt_to_pred_matches[gt_idx] = {}
-                        
-                        gt_to_pred_matches[gt_idx][step] = pred_indices[i]
+                    gt_to_query_over_time[gt_idx_i].append(pred_idx_i)
             
-            # 为每个gt目标绘制匹配变化曲线
-            plt.figure(figsize=(12, 8))
+            # 使用不同颜色绘制每个GT索引的匹配轨迹
+            colors = plt.cm.rainbow(np.linspace(0, 1, len(gt_to_query_over_time)))
+            color_idx = 0
             
-            for gt_idx, matches in gt_to_pred_matches.items():
-                if not matches:  # 跳过没有匹配记录的gt
-                    continue
+            for gt_idx, query_over_time in gt_to_query_over_time.items():
+                steps = range(len(query_over_time))
                 
-                steps = sorted(matches.keys())
-                pred_indices = [matches[s] for s in steps]
-                
-                plt.plot(steps, pred_indices, 'o-', label=f'GT {gt_idx}')
+                plt.plot(steps, query_over_time, 'o-', linewidth=1.5, 
+                        label=f'GT {gt_idx}', 
+                        color=colors[color_idx % len(colors)],
+                        markersize=4)
+                color_idx += 1
             
-            plt.xlabel('Training Step')
-            plt.ylabel('Matched Query Index')
-            plt.title(f'Query Assignment Changes Over Training (Batch {batch_idx})')
-            plt.legend()
             plt.grid(True)
+            plt.xlabel('Training Step', fontsize=12)
+            plt.ylabel('Matched Query Index', fontsize=12)
+            plt.title(f'Query Assignment Changes Over Training (Layer {layer_idx})', 
+                      fontsize=14, fontweight='bold')
             
             # 保存图像
-            plt.savefig(os.path.join(vis_dir, f'batch_{batch_idx}_matching.png'))
+            plt.legend(bbox_to_anchor=(1.02, 1), loc='upper right')
+            plt.tight_layout()
+            plt.savefig(os.path.join(vis_dir, f'layer_{layer_idx}_matching_lines.png'), dpi=300)
             plt.close()
-            
-        # 生成汇总报告
-        with open(os.path.join(vis_dir, 'matching_summary.txt'), 'w') as f:
-            f.write("Matching History Summary\n")
-            f.write("=======================\n\n")
-            f.write(f"Total training steps: {len(matching_history)}\n")
-            f.write(f"Number of batches: {num_batches}\n\n")
-            
-            # 计算匹配变化频率
-            for batch_idx in range(num_batches):
-                f.write(f"Batch {batch_idx} stats:\n")
-                
-                # 收集匹配变化信息
-                gt_changes = {}
-                
-                for gt_idx in gt_to_pred_matches:
-                    matches = gt_to_pred_matches.get(gt_idx, {})
-                    if not matches:
-                        continue
-                    
-                    steps = sorted(matches.keys())
-                    pred_indices = [matches[s] for s in steps]
-                    
-                    # 计算变化次数
-                    changes = sum(1 for i in range(1, len(pred_indices)) if pred_indices[i] != pred_indices[i-1])
-                    gt_changes[gt_idx] = changes
-                
-                # 写入变化统计
-                for gt_idx, changes in gt_changes.items():
-                    f.write(f"  GT {gt_idx}: changed assignments {changes} times\n")
-                
-                f.write("\n")
-            
+        
         print(f"Matching visualization completed. Results saved to {vis_dir}")
     
     def training_step(self, batch: Dict, batch_idx: int) -> Dict:
         """Training step."""
         # # Forward pass
-        outputs, _ = self(batch)
+        outputs, c_outputs = self(batch)
         
         # # Compute loss
-        loss_dict = self.criterion(outputs, batch['trajs'])
+        loss_dict = self.criterion(batch['trajs'], outputs, c_outputs)
         
         # # Log losses
         for name, value in loss_dict.items():
@@ -346,10 +354,10 @@ class E2EPerceptionModule(L.LightningModule):
     def validation_step(self, batch: Dict, batch_idx: int) -> Dict:
         """Validation step."""
         # Forward pass
-        outputs, _ = self(batch)
+        outputs, c_outputs = self(batch)
         
         # Compute loss
-        loss_dict = self.criterion(outputs, batch['trajs'])
+        loss_dict = self.criterion(batch['trajs'], outputs, c_outputs)
         
         # Store outputs for epoch end
         self.val_step_outputs.append({

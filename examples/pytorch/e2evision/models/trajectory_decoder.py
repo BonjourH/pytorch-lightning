@@ -28,6 +28,9 @@ class TrajectoryDACTransformerLayer(nn.Module):
         self.norm3 = nn.LayerNorm(feature_dim)
         
         self.dropout = nn.Dropout(0.1)
+        self.dropout1 = nn.Dropout(0.1)
+        self.dropout2 = nn.Dropout(0.1)
+        self.dropout3 = nn.Dropout(0.1)
         self.activation = nn.ReLU()
         
     def with_pos_embed(self, tensor, pos):
@@ -35,9 +38,9 @@ class TrajectoryDACTransformerLayer(nn.Module):
     
     
     def update_query_by_self_attn(self, tgt, 
+                                  query_pos: Optional[torch.Tensor] = None,
                                   tgt_mask: Optional[torch.Tensor] = None, 
-                                  tgt_key_padding_mask: Optional[torch.Tensor] = None,
-                                  query_pos: Optional[torch.Tensor] = None):
+                                  tgt_key_padding_mask: Optional[torch.Tensor] = None):
         tgt2 = self.self_attn(self.with_pos_embed(tgt, query_pos), 
                               self.with_pos_embed(tgt, query_pos), 
                               value=tgt, 
@@ -48,10 +51,10 @@ class TrajectoryDACTransformerLayer(nn.Module):
         return tgt
     
     def update_query_by_cross_attn(self, tgt, memory,
-                                   memory_mask: Optional[torch.Tensor] = None,
-                                   memory_key_padding_mask: Optional[torch.Tensor] = None,
                                    query_pos: Optional[torch.Tensor] = None,
-                                   memory_pos: Optional[torch.Tensor] = None):
+                                   memory_pos: Optional[torch.Tensor] = None,
+                                   memory_mask: Optional[torch.Tensor] = None,
+                                   memory_key_padding_mask: Optional[torch.Tensor] = None):
         tgt2 = self.cross_attn(self.with_pos_embed(tgt, query_pos), 
                                self.with_pos_embed(memory, memory_pos), 
                                value=tgt, 
@@ -72,7 +75,7 @@ class TrajectoryDACTransformerLayer(nn.Module):
                                   memory_pos: Optional[torch.Tensor] = None,
                                   memory_mask: Optional[torch.Tensor] = None,
                                   memory_key_padding_mask: Optional[torch.Tensor] = None):
-        tgt = self.update_query_by_cross_attn(tgt, memory, memory_mask, memory_key_padding_mask, query_pos, memory_pos)
+        tgt = self.update_query_by_cross_attn(tgt, memory, query_pos, memory_pos, memory_mask, memory_key_padding_mask)
         tgt = self.forward_ffn(tgt)
         return tgt
         
@@ -83,8 +86,8 @@ class TrajectoryDACTransformerLayer(nn.Module):
                 memory_mask: Optional[torch.Tensor] = None,
                 tgt_key_padding_mask: Optional[torch.Tensor] = None,
                 memory_key_padding_mask: Optional[torch.Tensor] = None):
-        tgt = self.update_query_by_self_attn(tgt, tgt_mask, tgt_key_padding_mask, query_pos)
-        tgt = self.update_query_by_cross_attn(tgt, memory, memory_mask, memory_key_padding_mask, query_pos, memory_pos)
+        tgt = self.update_query_by_self_attn(tgt, query_pos, tgt_mask, tgt_key_padding_mask)
+        tgt = self.update_query_by_cross_attn(tgt, memory, query_pos, memory_pos, memory_mask, memory_key_padding_mask)
         tgt = self.forward_ffn(tgt)
         return tgt
         
@@ -107,6 +110,7 @@ class TrajectoryDecoder(nn.Module):
         
         # Object queries
         self.pos_embeddings = nn.Embedding(num_queries, query_dim)
+        self.pos_embeddings2 = nn.Embedding(num_queries, query_dim)
         
         # Register unit points
         self.register_buffer('unit_points', generate_bbox_corners_points()) # [3, 9] corners + center
@@ -214,7 +218,7 @@ class TrajectoryDecoder(nn.Module):
         # It's similar to the way we do in DETR3D. Sparse sampling.
         
         trajs = self._decode_trajectory(queries)
-        pixels, behind_camera = project_points_to_image(trajs, calibrations, ego_states, self.unit_points, normalize=True)
+        # pixels, behind_camera = project_points_to_image(trajs, calibrations, ego_states, self.unit_points, normalize=True)
         features, feature_pos = None, None
         # TODO: grid sampling
         return trajs, features, feature_pos
@@ -237,24 +241,39 @@ class TrajectoryDecoder(nn.Module):
         # Initialize object queries position embedding
         B, T, _ = ego_states.shape
         pos_queries = self.pos_embeddings.weight.unsqueeze(0).repeat(B, 1, 1)
+        pos_queries2 = self.pos_embeddings2.weight.unsqueeze(0).repeat(B, 1, 1)
 
         init_trajs, o_features, o_feature_pos = self._sample_features_by_queries(pos_queries, features_dict, calibrations, ego_states)
         c_features, c_feature_pos = o_features, o_feature_pos
         
         o_decoder_outputs, c_decoder_outputs = [init_trajs], [init_trajs] # o: standard decoder, c: cross-attention decoder
+    
         o_tgt = torch.zeros(B, self.num_queries, self.query_dim)
         c_tgt = torch.zeros(B, self.num_queries, self.query_dim)
+        o_tgt = o_tgt.to(init_trajs.device)
+        c_tgt = c_tgt.to(init_trajs.device)
+        
+        
+        c_features = pos_queries2
         for layer in self.layers:
-            break
             # 1. update query by transformer layer(standard)
-            o_tgt = layer(o_tgt, o_features, pos_queries, o_feature_pos)
+            o_tgt = layer(o_tgt, pos_queries2, pos_queries, o_feature_pos)
             # 2. update query by transformer layer(without self-attention)
-            c_tgt = layer.forward_without_self_attn(c_tgt, c_features, pos_queries, c_feature_pos)
+            c_tgt = layer.forward_without_self_attn(c_tgt, pos_queries2, pos_queries, c_feature_pos)
             # 3. sample features from features_dict
             o_trajs, o_features, o_feature_pos = self._sample_features_by_queries(o_tgt, features_dict, calibrations, ego_states)
             c_trajs, c_features, c_feature_pos = self._sample_features_by_queries(c_tgt, features_dict, calibrations, ego_states)
             o_decoder_outputs.append(o_trajs)
             c_decoder_outputs.append(c_trajs)
-            
-        return  o_decoder_outputs, c_decoder_outputs
         
+            # # 1. update query by transformer layer(standard)
+            # o_tgt = layer(o_tgt, o_features, pos_queries, o_feature_pos)
+            # # 2. update query by transformer layer(without self-attention)
+            # c_tgt = layer.forward_without_self_attn(c_tgt, c_features, pos_queries, c_feature_pos)
+            # # 3. sample features from features_dict
+            # o_trajs, o_features, o_feature_pos = self._sample_features_by_queries(o_tgt, features_dict, calibrations, ego_states)
+            # c_trajs, c_features, c_feature_pos = self._sample_features_by_queries(c_tgt, features_dict, calibrations, ego_states)
+            # o_decoder_outputs.append(o_trajs)
+            # c_decoder_outputs.append(c_trajs)
+            
+        return o_decoder_outputs, c_decoder_outputs

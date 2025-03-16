@@ -101,8 +101,8 @@
     },
     "model": {
       "decoder": {
-        "num_layers": 3,
-        "num_queries": 128,
+        "num_layers": 1,
+        "num_queries": 64,
         "query_dim": 128,
         "feature_dim": 256,
         "hidden_dim": 512,
@@ -120,7 +120,7 @@
       "devices": 1,
       "precision": 32,
       "accumulate_grad_batches": 1,
-      "seed": 12,
+      "seed": 10,
       "pretrained_weights": "true",
       "limit_val_batches": 1,
       "limit_train_batches": 1,
