@@ -4,6 +4,7 @@ import torch.nn as nn
 import cv2
 import numpy as np
 import os, sys, json
+import matplotlib.pyplot as plt
 from typing import Dict, List, Optional, Union, Tuple
 from torch.optim import Adam
 from torch.optim.lr_scheduler import CosineAnnealingLR, OneCycleLR
@@ -206,10 +207,101 @@ class E2EPerceptionModule(L.LightningModule):
     def on_train_start(self):
         """On train start."""
         print("On train start")
+        # 确保重置匹配历史记录
+        self.criterion.reset_matching_history()
+        
         # save config file
         config_path = os.path.join(self.config.logging.log_dir, "train_config.json")
         with open(config_path, 'w') as f:
             json.dump(self.config, f, indent=2)
+            
+    def on_train_end(self):
+        """On train end, visualize the matching history."""
+        print("Visualizing matching history...")
+        
+        # 获取匹配历史记录
+        matching_history = self.criterion.get_matching_history()
+        
+        if not matching_history:
+            print("No matching history to visualize.")
+            return
+        
+        # 创建保存可视化结果的目录
+        vis_dir = os.path.join(self.config.logging.log_dir, "matching_visualization")
+        os.makedirs(vis_dir, exist_ok=True)
+        
+        # 对每个batch样本分别可视化
+        num_batches = len(list(matching_history.values())[0])
+        for batch_idx in range(num_batches):
+            # 收集该batch样本随时间变化的匹配结果
+            gt_to_pred_matches = {}
+            
+            for step, indices_list in matching_history.items():
+                if batch_idx < len(indices_list):
+                    pred_indices, gt_indices = indices_list[batch_idx]
+                    
+                    # 对每个gt目标，记录其匹配的预测索引
+                    for i, gt_idx in enumerate(gt_indices):
+                        if gt_idx not in gt_to_pred_matches:
+                            gt_to_pred_matches[gt_idx] = {}
+                        
+                        gt_to_pred_matches[gt_idx][step] = pred_indices[i]
+            
+            # 为每个gt目标绘制匹配变化曲线
+            plt.figure(figsize=(12, 8))
+            
+            for gt_idx, matches in gt_to_pred_matches.items():
+                if not matches:  # 跳过没有匹配记录的gt
+                    continue
+                
+                steps = sorted(matches.keys())
+                pred_indices = [matches[s] for s in steps]
+                
+                plt.plot(steps, pred_indices, 'o-', label=f'GT {gt_idx}')
+            
+            plt.xlabel('Training Step')
+            plt.ylabel('Matched Query Index')
+            plt.title(f'Query Assignment Changes Over Training (Batch {batch_idx})')
+            plt.legend()
+            plt.grid(True)
+            
+            # 保存图像
+            plt.savefig(os.path.join(vis_dir, f'batch_{batch_idx}_matching.png'))
+            plt.close()
+            
+        # 生成汇总报告
+        with open(os.path.join(vis_dir, 'matching_summary.txt'), 'w') as f:
+            f.write("Matching History Summary\n")
+            f.write("=======================\n\n")
+            f.write(f"Total training steps: {len(matching_history)}\n")
+            f.write(f"Number of batches: {num_batches}\n\n")
+            
+            # 计算匹配变化频率
+            for batch_idx in range(num_batches):
+                f.write(f"Batch {batch_idx} stats:\n")
+                
+                # 收集匹配变化信息
+                gt_changes = {}
+                
+                for gt_idx in gt_to_pred_matches:
+                    matches = gt_to_pred_matches.get(gt_idx, {})
+                    if not matches:
+                        continue
+                    
+                    steps = sorted(matches.keys())
+                    pred_indices = [matches[s] for s in steps]
+                    
+                    # 计算变化次数
+                    changes = sum(1 for i in range(1, len(pred_indices)) if pred_indices[i] != pred_indices[i-1])
+                    gt_changes[gt_idx] = changes
+                
+                # 写入变化统计
+                for gt_idx, changes in gt_changes.items():
+                    f.write(f"  GT {gt_idx}: changed assignments {changes} times\n")
+                
+                f.write("\n")
+            
+        print(f"Matching visualization completed. Results saved to {vis_dir}")
     
     def training_step(self, batch: Dict, batch_idx: int) -> Dict:
         """Training step."""

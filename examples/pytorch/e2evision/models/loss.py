@@ -277,6 +277,9 @@ class TrajectoryLoss(nn.Module):
         
         self.config = config
         self.weight_dict = config.weight_dict
+        # 存储匹配结果的字典
+        self.matching_history = {}
+        self.step_counter = 0
     
     def forward(self, outputs: List[torch.Tensor], gt_trajs: torch.Tensor) -> Dict[str, torch.Tensor]:
         """
@@ -309,6 +312,10 @@ class TrajectoryLoss(nn.Module):
             
             indices_list.append(indices)
         
+        # 存储匹配结果历史
+        self.matching_history[self.step_counter] = indices_list
+        self.step_counter += 1
+        
         # 使用相同的匹配结果计算每一层的损失
         for idx, pred_trajs in enumerate(outputs):
             # 使用最后一层的匹配结果计算当前层的损失
@@ -326,6 +333,15 @@ class TrajectoryLoss(nn.Module):
         losses['loss'] = total_loss
         
         return losses
+    
+    def get_matching_history(self):
+        """返回匹配结果历史记录"""
+        return self.matching_history
+    
+    def reset_matching_history(self):
+        """重置匹配结果历史记录"""
+        self.matching_history = {}
+        self.step_counter = 0
     
     def _compute_losses_with_indices(self, pred_trajs, gt_trajs, indices_list, prefix=''):
         """使用给定的匹配索引计算损失。"""
