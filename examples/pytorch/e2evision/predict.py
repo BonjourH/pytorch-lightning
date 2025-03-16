@@ -18,10 +18,8 @@ def parse_args():
     """解析命令行参数"""
     parser = argparse.ArgumentParser(description='Lightning-based Perception Inference')
     parser.add_argument('--config_file', type=str, help='Path to config file')
-    parser.add_argument('--checkpoint', type=str, help='Path to model checkpoint')
+    parser.add_argument('--checkpoint', type=str, default='./last.ckpt', help='Path to model checkpoint')
     parser.add_argument('--test_list', type=str, help='Path to txt file containing test clip paths')
-    parser.add_argument('--output_dir', type=str, default='./outputs', help='Output directory')
-    parser.add_argument('--batch_size', type=int, default=8, help='Inference batch size')
     
     parser.add_argument('--config-override', nargs='+', action='append', 
                         help='Override config values. Format: section.key=value')
@@ -52,7 +50,7 @@ class PredictionWriter(L.Callback):
                       f"\n dimension: {batch_traj_vecs[0][TrajParamIndex.LENGTH]:.2f}, {batch_traj_vecs[0][TrajParamIndex.WIDTH]:.2f}, {batch_traj_vecs[0][TrajParamIndex.HEIGHT]:.2f}"
                       f"\n velocity: {batch_traj_vecs[0][TrajParamIndex.VX]:.2f}, {batch_traj_vecs[0][TrajParamIndex.VY]:.2f},"
                       f"\n acceleration: {batch_traj_vecs[0][TrajParamIndex.AX]:.3f}, {batch_traj_vecs[0][TrajParamIndex.AY]:.3f}")
-                import pdb; pdb.set_trace()
+                # import pdb; pdb.set_trace()
                 
             for j in range(last_layer_outputs.shape[1]):
                 traj_vec = last_layer_outputs[i][j]
@@ -62,7 +60,7 @@ class PredictionWriter(L.Callback):
         print(f"This batch has {len(valid_trajs)} valid predictions")
         
         self.predictions.append(valid_trajs)
-    
+           
     def on_predict_end(self, trainer, pl_module):
         """保存所有预测结果"""
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -95,7 +93,7 @@ def main():
     )
     
     # 创建Trainer配置
-    writer_callback = PredictionWriter(args.output_dir)
+    writer_callback = PredictionWriter(config.predict.output_dir)
     trainer = L.Trainer(
         accelerator="auto",
         devices="auto",
@@ -108,6 +106,7 @@ def main():
     # 执行预测
     print(f"\n🚀 Starting inference on {len(dataset)} samples...")
     trainer.predict(model, dataloaders=dataloader)
+    
 
 if __name__ == "__main__":
     main()

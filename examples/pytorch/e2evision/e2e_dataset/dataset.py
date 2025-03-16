@@ -80,6 +80,7 @@ class MultiFrameDataset(Dataset):
             # 1. Load calibrations
             calibrations: Dict[SourceCameraId, torch.Tensor] = {}
             for camera_id in self.config.camera_ids:
+                camera_id = SourceCameraId(camera_id)
                 calib_file = os.path.join(clip_dir, 'calib_json', f'{camera_id.name.lower()}.json')
                 with open(calib_file, 'r') as f:
                     calib_data = json.load(f)
@@ -189,6 +190,7 @@ class MultiFrameDataset(Dataset):
                     # Collect image paths
                     img_paths = {}
                     for camera_id in self.config.camera_ids:
+                        camera_id = SourceCameraId(camera_id)
                         img_path = os.path.join(clip_dir, camera_id.name.lower(), f'{timestamp}.png')
                         assert os.path.exists(img_path), f"Image not found: {img_path}"
                         img_paths[camera_id] = img_path

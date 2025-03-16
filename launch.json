@@ -1,0 +1,13 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python Debug",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/pytorch/e2evision/predict.py",
+            "console": "integratedTerminal",
+            "cwd": "/home/xinjian/Code/pytorch-lightning/examples/pytorch/e2evision"
+        }
+    ]
+}

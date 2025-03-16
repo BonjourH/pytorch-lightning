@@ -1,0 +1,228 @@
+{
+  "data": {
+    "train_list": "train_clips.txt",
+    "val_list": "val_clips.txt",
+    "test_list": "test_list.txt",
+    "sequence_length": 1,
+    "shuffle": false,
+    "persistent_workers": false,
+    "batch_size": 5,
+    "num_workers": 20,
+    "camera_ids": [
+      3,
+      1,
+      2,
+      4,
+      5,
+      6,
+      7
+    ],
+    "camera_groups": [
+      {
+        "name": "front_stereo_camera",
+        "camera_group": [
+          1,
+          2
+        ],
+        "image_size": [
+          576,
+          288
+        ],
+        "normalize_mean": [
+          0.485,
+          0.456,
+          0.406
+        ],
+        "normalize_std": [
+          0.229,
+          0.224,
+          0.225
+        ],
+        "backbone": "repvgg_a1",
+        "out_channels": 256,
+        "fpn_channels": 256,
+        "downsample_scale": 4,
+        "use_pretrained": true
+      },
+      {
+        "name": "short_focal_length_camera",
+        "camera_group": [
+          4,
+          5,
+          3
+        ],
+        "image_size": [
+          400,
+          256
+        ],
+        "normalize_mean": [
+          0.485,
+          0.456,
+          0.406
+        ],
+        "normalize_std": [
+          0.229,
+          0.224,
+          0.225
+        ],
+        "backbone": "repvgg_a1",
+        "out_channels": 256,
+        "fpn_channels": 256,
+        "downsample_scale": 16,
+        "use_pretrained": true
+      },
+      {
+        "name": "rear_camera",
+        "camera_group": [
+          6,
+          7
+        ],
+        "image_size": [
+          576,
+          288
+        ],
+        "normalize_mean": [
+          0.485,
+          0.456,
+          0.406
+        ],
+        "normalize_std": [
+          0.229,
+          0.224,
+          0.225
+        ],
+        "backbone": "repvgg_a1",
+        "out_channels": 256,
+        "fpn_channels": 256,
+        "downsample_scale": 8,
+        "use_pretrained": true
+      }
+    ]
+  },
+  "model": {
+    "decoder": {
+      "num_layers": 3,
+      "num_queries": 64,
+      "query_dim": 256,
+      "feature_dim": 256,
+      "hidden_dim": 512,
+      "num_points": 25
+    }
+  },
+  "training": {
+    "train_list": "train_clips.txt",
+    "val_list": "val_clips.txt",
+    "batch_size": 1,
+    "num_workers": 1,
+    "max_epochs": 1000,
+    "accelerator": "gpu",
+    "devices": 1,
+    "precision": "16-mixed",
+    "accumulate_grad_batches": 4,
+    "seed": 42,
+    "pretrained_weights": false,
+    "limit_val_batches": 1,
+    "limit_train_batches": 1,
+    "learning_rate": 0.0001,
+    "pct_start": 0.3,
+    "div_factor": 25.0,
+    "final_div_factor": 1000.0,
+    "weight_decay": 0.0001,
+    "gradient_clip_val": 1.0,
+    "use_checkpoint": true,
+    "log_every_n_steps": 30,
+    "check_val_every_n_epoch": 10000,
+    "num_sanity_val_steps": 1
+  },
+  "predict": {
+    "test_list": "test_list.txt",
+    "confidence_threshold": 0.5,
+    "batch_size": 1,
+    "num_workers": 20,
+    "accelerator": "gpu",
+    "devices": 1,
+    "precision": "16-mixed",
+    "output_dir": "tmp_results/e2e_perception_inference",
+    "seed": 42,
+    "checkpoint": "checkpoints/last.ckpt",
+    "limit_batch_size": 1
+  },
+  "logging": {
+    "log_dir": "logs",
+    "checkpoint_dir": "checkpoints",
+    "save_top_k": 3,
+    "last_checkpoint_dir": null,
+    "use_tensorboard": true,
+    "use_csv": true,
+    "use_wandb": true,
+    "wandb_project": "e2e_perception",
+    "run_id": 0,
+    "clean_wandb_history": true,
+    "progress_bar_metrics": [
+      "v_num",
+      "train/loss_step",
+      "train/loss_epoch",
+      "train/layer_3_loss_cls_epoch",
+      "train/layer_3_loss_pos_epoch",
+      "val/loss",
+      "epoch",
+      "step"
+    ],
+    "use_optional_metrics": true,
+    "wandb_log_metrics": [
+      "train/loss_epoch",
+      "val/loss",
+      "train/layer_3_loss_pos_epoch",
+      "train/layer_3_loss_dim_epoch",
+      "train/layer_3_loss_vel_epoch",
+      "train/layer_3_loss_yaw_epoch",
+      "train/layer_3_loss_acc_epoch",
+      "train/layer_3_loss_cls_epoch",
+      "train/layer_3_fp_loss_exist_epoch",
+      "train/layer_2_loss_cls_epoch",
+      "train/layer_2_loss_pos_epoch",
+      "train/layer_2_loss_dim_epoch",
+      "train/layer_2_loss_vel_epoch",
+      "train/layer_2_loss_yaw_epoch",
+      "train/layer_2_loss_acc_epoch",
+      "train/layer_2_loss_cls_epoch",
+      "train/layer_2_fp_loss_exist_epoch",
+      "train/layer_1_loss_cls_epoch",
+      "train/layer_1_loss_pos_epoch",
+      "train/layer_1_loss_dim_epoch",
+      "train/layer_1_loss_vel_epoch",
+      "train/layer_1_loss_yaw_epoch",
+      "train/layer_1_loss_acc_epoch",
+      "train/layer_1_loss_cls_epoch",
+      "train/layer_1_fp_loss_exist_epoch"
+    ],
+    "with_checkpoint_copy_callback": false,
+    "visualize_intermediate_results": false,
+    "visualize_intermediate_results_dir": "visualize_intermediate_results",
+    "point_radius": 1
+  },
+  "loss": {
+    "weight_dict": {
+      "loss_pos": 1.0,
+      "loss_dim": 1.0,
+      "loss_vel": 0.5,
+      "loss_yaw": 0.5,
+      "loss_acc": 0.1,
+      "loss_cls": 1.0,
+      "fp_loss_exist": 2.0
+    },
+    "layer_loss_weights": [
+      0.1,
+      0.3,
+      0.5,
+      0.7,
+      0.8,
+      0.9,
+      1.0
+    ],
+    "frames": 10,
+    "dt": 0.1,
+    "iou_method": "iou2",
+    "iou_threshold": 0.5
+  }
+}

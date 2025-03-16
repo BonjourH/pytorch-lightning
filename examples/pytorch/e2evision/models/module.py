@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import cv2
 import numpy as np
-import os, sys
+import os, sys, json
 from typing import Dict, List, Optional, Union, Tuple
 from torch.optim import Adam
 from torch.optim.lr_scheduler import CosineAnnealingLR, OneCycleLR
@@ -201,6 +201,14 @@ class E2EPerceptionModule(L.LightningModule):
         """Visualize predicted trajectories."""
         pass
     
+    def on_train_start(self):
+        """On train start."""
+        print("On train start")
+        # save config file
+        config_path = os.path.join(self.config.logging.log_dir, "train_config.json")
+        with open(config_path, 'w') as f:
+            json.dump(self.config, f, indent=2)
+    
     def training_step(self, batch: Dict, batch_idx: int) -> Dict:
         """Training step."""
         # # Forward pass
@@ -323,6 +331,19 @@ class E2EPerceptionModule(L.LightningModule):
     def on_predict_epoch_end(self):
         """On predict epoch end."""
         print("On predict epoch end")
+        
+    def on_predict_start(self):
+        """On predict start."""
+        print("On predict start")
+        # save config file
+        os.makedirs(self.config.predict.output_dir, exist_ok=True)
+        config_path = os.path.join(self.config.predict.output_dir, "predict_config.json")
+        with open(config_path, 'w') as f:
+            json.dump(self.config, f, indent=2)
+        
+    def on_predict_end(self):
+        """On predict end."""
+        print("On predict end")
         
     def _compute_metrics(self, predictions: List[torch.Tensor], targets: List[torch.Tensor]) -> Dict:
         """Compute evaluation metrics."""

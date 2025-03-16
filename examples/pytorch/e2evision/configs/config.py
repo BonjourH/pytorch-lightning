@@ -104,7 +104,7 @@ class DataConfig(ConfigBase):
 class DecoderConfig(ConfigBase):
     """Decoder configuration"""
     num_layers: int = 3
-    num_queries: int = 128
+    num_queries: int = 64
     query_dim: int = 256
     feature_dim: int = 256
     hidden_dim: int = 512
@@ -114,6 +114,7 @@ class DecoderConfig(ConfigBase):
 class ModelConfig(ConfigBase):
     """Model configuration"""
     decoder: DecoderConfig = field(default_factory=DecoderConfig)
+    memory_efficient: bool = False
 
 @dataclass
 class TrainingConfig(ConfigBase):
@@ -153,7 +154,7 @@ class InferenceConfig(ConfigBase):
     accelerator: str = 'gpu'
     devices: int = 1
     precision: str = '16-mixed'
-    output_dir: str = 'results'
+    output_dir: str = 'predict_results'
     seed: int = 42
     checkpoint: str = 'checkpoints/last.ckpt'
     limit_batch_size: int = 1
@@ -286,6 +287,8 @@ class Config(ConfigBase):
     @classmethod
     def load(cls, path: Union[str, Path]) -> 'Config':
         """Load configuration from file"""
+        if not os.path.exists(path):
+            return Config()
         try:
             path = Path(path)
             if path.suffix == '.json':
@@ -297,6 +300,7 @@ class Config(ConfigBase):
             else:
                 raise ValueError(f"Unsupported file type: {path.suffix}")
         except Exception as e:
+            import pdb; pdb.set_trace()
             return Config()
     
     @classmethod
