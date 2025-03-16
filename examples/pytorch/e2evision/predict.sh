@@ -2,7 +2,7 @@
 set -euo pipefail # 严格的错误处理模式
 
 # 创建日志和结果目录
-RESULTS_DIR="tmp_results"
+RESULTS_DIR="predict_results"
 mkdir -p "${RESULTS_DIR}"
 
 # 推理参数，可通过环境变量覆盖默认值
@@ -15,12 +15,12 @@ DEVICES=${DEVICES:-1}
 PRECISION=${PRECISION:-"32"}
 CONFIDENCE_THRESHOLD=${CONFIDENCE_THRESHOLD:-0.5}
 CHECKPOINT=${CHECKPOINT:-"last.ckpt"} # 默认使用保存的最新模型
-CONFIG_FILE=${CONFIG_FILE:-"configs/default.json"}
+CONFIG_FILE=${CONFIG_FILE:-"configs/one_cycle.json"}
 USE_OVERRIDES=${USE_OVERRIDES:-1}
 
 # 创建带时间戳的实验名称
 TIMESTAMP=$(date +%Y%m%d || echo "default")
-EXP_NAME="e2e_perception_inference" #_${TIMESTAMP}"
+EXP_NAME="e2e_perception" #_${TIMESTAMP}"
 
 # 设置日志文件
 LOG_FILE="${RESULTS_DIR}/${EXP_NAME}.log"

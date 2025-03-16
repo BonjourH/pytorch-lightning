@@ -115,7 +115,7 @@
       "val_list": "val_clips.txt",
       "batch_size": 1,
       "num_workers": 20,
-      "max_epochs": 1000,
+      "max_epochs": 100,
       "accelerator": "gpu",
       "devices": 1,
       "precision": 32,

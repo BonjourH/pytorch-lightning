@@ -18,21 +18,21 @@ class E2EPerceptionNet(nn.Module):
     def __init__(self, model_config: ModelConfig, data_config: DataConfig, use_checkpoint: bool = True):
         super().__init__()
         
-        # Create feature extractors for each camera group
-        self.feature_extractors = nn.ModuleDict({
-            cfg.name: FPNImageFeatureExtractor(
-                camera_ids=cfg.camera_group,
-                downsample_scale=cfg.downsample_scale,
-                fpn_channels=cfg.fpn_channels,
-                out_channels=cfg.out_channels,
-                use_pretrained=cfg.use_pretrained,
-                backbone=cfg.backbone
-            )
-            for cfg in data_config.camera_groups
-        })
+        # # Create feature extractors for each camera group
+        # self.feature_extractors = nn.ModuleDict({
+        #     cfg.name: FPNImageFeatureExtractor(
+        #         camera_ids=cfg.camera_group,
+        #         downsample_scale=cfg.downsample_scale,
+        #         fpn_channels=cfg.fpn_channels,
+        #         out_channels=cfg.out_channels,
+        #         use_pretrained=cfg.use_pretrained,
+        #         backbone=cfg.backbone
+        #     )
+        #     for cfg in data_config.camera_groups
+        # })
         
-        # Temporal fusion for each camera
-        self.temporal_fusion = TemporalFusionFactory.create(strategy='average')
+        # # Temporal fusion for each camera
+        # self.temporal_fusion = TemporalFusionFactory.create(strategy='average')
         
         # Trajectory decoder
         self.decoder = TrajectoryDecoder(model_config.decoder.num_layers,
@@ -69,27 +69,28 @@ class E2EPerceptionNet(nn.Module):
         """
         
         # Extract features from each camera with gradient checkpointing
-        all_features_dict = {}
-        for name, imgs in batch['images'].items():
-            if self.use_checkpoint:
-                feat = checkpoint.checkpoint(self._extract_features, name, imgs, use_reentrant=False)
-            else:
-                feat = self._extract_features(name, imgs)
+        # all_features_dict = {}
+        # for name, imgs in batch['images'].items():
+        #     if self.use_checkpoint:
+        #         feat = checkpoint.checkpoint(self._extract_features, name, imgs, use_reentrant=False)
+        #     else:
+        #         feat = self._extract_features(name, imgs)
                 
-            for idx, camera_id in enumerate(self.feature_extractors[name].camera_ids):
-                all_features_dict[camera_id] = feat[:, :, idx]
+        #     for idx, camera_id in enumerate(self.feature_extractors[name].camera_ids):
+        #         all_features_dict[camera_id] = feat[:, :, idx]
         
         # Fuse temporal features for each camera
-        fused_features_dict = {}
-        for camera_id, features in all_features_dict.items():
-            fused_features_dict[camera_id] = self.temporal_fusion(features)
+        # fused_features_dict = {}
+        # for camera_id, features in all_features_dict.items():
+        #     fused_features_dict[camera_id] = self.temporal_fusion(features)
         
         # Decode trajectories
+        fused_features_dict = {}
         outputs = self.decoder(fused_features_dict, batch['calibrations'], batch['ego_states'])
         
         # Clear intermediate tensors to save memory
-        del all_features_dict
-        del fused_features_dict
-        torch.cuda.empty_cache()
+        # del all_features_dict
+        # del fused_features_dict
+        # torch.cuda.empty_cache()
         
         return outputs 
