@@ -106,7 +106,27 @@
         "query_dim": 128,
         "feature_dim": 256,
         "hidden_dim": 512,
-        "num_points": 25
+        "num_points": 25,
+        "anchor_encoder_config": {
+          "position_embedding_dim": 128,
+          "dimension_embedding_dim": 32,
+          "velocity_embedding_dim": 64,
+          "yaw_embedding_dim": 64,
+          "anchor_embedding_dim": 256,
+          "anchor_generator_config": {
+            "front_type": "div_x",
+            "back_type": "div_x",
+            "front_params": {"alpha": 0.4, "beta": 10.0, "order": 2.0},
+            "back_params": {"alpha": 0.35, "beta": 10.0, "order": 2.0},
+            "front_min_spacing": 2.0,
+            "front_max_distance": 200.0,
+            "back_min_spacing": 2.0,
+            "back_max_distance": 100.0,
+            "left_y_max": 7.5,
+            "right_y_max": 7.5,
+            "y_interval": 3.75
+          }
+        }
       },
       "memory_efficient": 1
     },

@@ -1,16 +1,17 @@
 import torch
 import torch.nn as nn
 import torchvision.models as models
-from typing import Dict, Optional, List, Tuple
+from typing import Dict, Optional, List, Tuple, Union
 import numpy as np
 import torch.nn.functional as F
 from timm.models import create_model
-
+import os
 from base import SourceCameraId, TrajParamIndex, CameraParamIndex, EgoStateIndex, CameraType
 from utils.math_utils import generate_bbox_corners_points
 from utils.pose_transform import project_points_to_image
 from e2e_dataset.dataset import MAX_TRAJ_NB
-
+from .anchor_generator import AnchorGenerator
+from configs.config import AnchorEncoderConfig
 
 class TrajectoryDACTransformerLayer(nn.Module):
     """We use DAC-DETR method"""
@@ -90,6 +91,74 @@ class TrajectoryDACTransformerLayer(nn.Module):
         tgt = self.update_query_by_cross_attn(tgt, memory, query_pos, memory_pos, memory_mask, memory_key_padding_mask)
         tgt = self.forward_ffn(tgt)
         return tgt
+
+
+class AnchorEncoder(nn.Module):
+    """Encode anchors to features."""
+    def __init__(self, anchor_config: Union[Dict, AnchorEncoderConfig]):
+        super().__init__()
+        if isinstance(anchor_config, AnchorEncoderConfig):
+            self.anchor_config = anchor_config
+        else:
+            self.anchor_config = AnchorEncoderConfig(**anchor_config)
+        
+        self.position_embed_layer = nn.Sequential(
+            nn.Linear(3, self.anchor_config.position_embedding_dim),
+            nn.ReLU(),
+            nn.LayerNorm(self.anchor_config.position_embedding_dim),
+            nn.Linear(self.anchor_config.position_embedding_dim, self.anchor_config.position_embedding_dim),
+            nn.ReLU(),
+            nn.LayerNorm(self.anchor_config.position_embedding_dim)
+        )
+        
+        self.dimension_embed_layer = nn.Sequential(
+            nn.Linear(3, self.anchor_config.dimension_embedding_dim),
+            nn.ReLU(),
+            nn.LayerNorm(self.anchor_config.dimension_embedding_dim),
+            nn.Linear(self.anchor_config.dimension_embedding_dim, self.anchor_config.dimension_embedding_dim),
+            nn.ReLU(),
+            nn.LayerNorm(self.anchor_config.dimension_embedding_dim)
+        )
+        
+        self.velocity_embed_layer = nn.Sequential(
+            nn.Linear(2, self.anchor_config.velocity_embedding_dim),
+            nn.ReLU(),
+            nn.LayerNorm(self.anchor_config.velocity_embedding_dim),
+            nn.Linear(self.anchor_config.velocity_embedding_dim, self.anchor_config.velocity_embedding_dim),
+            nn.ReLU(),
+            nn.LayerNorm(self.anchor_config.velocity_embedding_dim)
+        )
+
+        self._generate_init_trajs()
+    
+    def _generate_init_trajs(self) -> torch.Tensor:
+        self.anchor_generator = AnchorGenerator.create(**self.anchor_config.anchor_generator_config)
+        self.anchors = self.anchor_generator.generate_anchors() # [N, 6] x, y, z, length, width, height
+        print(f"total anchors: {self.anchors.shape[0]}")
+        self.anchor_generator.save_bev_anchor_fig(os.getcwd())
+        # self.init_trajs = torch.zeros(self.anchors.shape[0], TrajParamIndex.END_OF_INDEX)
+        self.init_trajs = torch.rand(self.anchors.shape[0], TrajParamIndex.END_OF_INDEX)
+        self.init_trajs[:, TrajParamIndex.X:TrajParamIndex.Z + 1] = self.anchors[:, :3]
+        self.init_trajs[:, TrajParamIndex.LENGTH:TrajParamIndex.HEIGHT + 1] = self.anchors[:, 3:6]
+        self.init_trajs[:, TrajParamIndex.X] += 4.5 # front bumper to imu
+        return self.init_trajs
+    
+    def get_init_trajs(self, speed: float = 23.0) -> torch.Tensor:
+        self.init_trajs[:, TrajParamIndex.VX] = speed
+        return self.init_trajs
+    
+    def forward(self, trajs: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            trajs: Tensor[B, num_queries, TrajParamIndex.END_OF_INDEX]
+            
+        Returns:
+            Tensor[B, num_queries, 256]
+        """
+        position_embed = self.position_embed_layer(trajs[:, :, TrajParamIndex.X:TrajParamIndex.Z + 1])
+        dimension_embed = self.dimension_embed_layer(trajs[:, :, TrajParamIndex.LENGTH:TrajParamIndex.HEIGHT + 1])
+        velocity_embed = self.velocity_embed_layer(trajs[:, :, TrajParamIndex.VX:TrajParamIndex.VY + 1])
+        return torch.cat([position_embed, dimension_embed, velocity_embed], dim=-1)
         
         
 class TrajectoryDecoder(nn.Module):
@@ -101,7 +170,8 @@ class TrajectoryDecoder(nn.Module):
                  feature_dim: int = 256,
                  query_dim: int = 256,
                  hidden_dim: int = 512,
-                 num_points: int = 25): # Points to sample per face of the unit cube
+                 num_points: int = 25,
+                 anchor_encoder_config: AnchorEncoderConfig = None): # Points to sample per face of the unit cube
         super().__init__()
         self.num_queries = num_queries
         self.query_dim = query_dim
@@ -111,7 +181,7 @@ class TrajectoryDecoder(nn.Module):
         # Object queries
         self.pos_embeddings = nn.Embedding(num_queries, query_dim)
         self.pos_embeddings2 = nn.Embedding(num_queries, query_dim)
-        
+
         # Register unit points
         self.register_buffer('unit_points', generate_bbox_corners_points()) # [3, 9] corners + center
         self.register_buffer('origin_point', torch.zeros(3, 1)) # [3, 1]
@@ -153,6 +223,10 @@ class TrajectoryDecoder(nn.Module):
         for p in self.parameters():
             if p.dim() > 1:
                 nn.init.xavier_normal_(p)
+        
+        # Anchor generator
+        self.anchor_encoder = AnchorEncoder(anchor_encoder_config)
+        self.init_trajs = nn.Parameter(self.anchor_encoder.get_init_trajs(speed=23.0))
     
     def _get_motion_param_range(self)->torch.Tensor:
         """Get parameter ranges for normalization.

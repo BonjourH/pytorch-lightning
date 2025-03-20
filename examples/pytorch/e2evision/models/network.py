@@ -40,7 +40,8 @@ class E2EPerceptionNet(nn.Module):
                                         model_config.decoder.feature_dim,
                                         model_config.decoder.query_dim,
                                         model_config.decoder.hidden_dim,
-                                        model_config.decoder.num_points)
+                                        model_config.decoder.num_points,
+                                        model_config.decoder.anchor_encoder_config)
         
         # Enable gradient checkpointing for memory efficiency
         self.use_checkpoint = use_checkpoint

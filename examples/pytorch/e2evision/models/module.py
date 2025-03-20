@@ -179,6 +179,26 @@ class E2EPerceptionModule(L.LightningModule):
     
         return imgs_dict, concat_imgs
     
+    def visualize_init_trajs(self, batch: Dict):
+        """Visualize initial trajectories."""
+        # 1. read images
+        imgs_dict = TrainingSample.read_seqeuntial_images_to_tensor(batch['image_paths'], self.device)
+        # imgs_dict: Dict[SourceCameraId, torch.Tensor[B, T, C, H, W]]  
+        
+        # 2. render init trajs
+        init_trajs = self.net.decoder.init_trajs.expand(batch['ego_states'].shape[0], -1, -1)
+        imgs_dict, concat_imgs = self._render_trajs_on_imgs(init_trajs, 
+                                                    batch['camera_ids'],
+                                                    batch['calibrations'],
+                                                    batch['ego_states'], 
+                                                    imgs_dict,
+                                                    color=torch.tensor([0.0, 255.0, 0.0]))
+        
+        # 3. save images
+        save_dir = os.path.join(self.config.logging.visualize_intermediate_results_dir, 'init')
+        os.makedirs(save_dir, exist_ok=True)
+        for camera_id in imgs_dict.keys():
+            cv2.imwrite(os.path.join(save_dir, f'init_{camera_id}.png'), concat_imgs[camera_id])
         
     def visualize_gt_trajs(self, batch: Dict):
         """Visualize ground truth trajectories."""
@@ -334,7 +354,15 @@ class E2EPerceptionModule(L.LightningModule):
                                                     batch['ego_states'], 
                                                     imgs_dict,
                                                     color=torch.tensor([0.0, 255.0, 0.0]))
-            # 3. render pred trajs
+            # 3. visualize init trajs
+            init_trajs = self.net.decoder.init_trajs.expand(batch['ego_states'].shape[0], -1, -1)
+            imgs_dict, concat_imgs = self._render_trajs_on_imgs(init_trajs, 
+                                                    batch['camera_ids'],
+                                                    batch['calibrations'],
+                                                    batch['ego_states'], 
+                                                    imgs_dict,
+                                                    color=torch.tensor([0.0, 255.0, 0.0]))
+            # 4. visualize pred trajs
             # imgs_dict, concat_imgs = self._render_trajs_on_imgs(outputs[-1]['trajs'], 
             #                                         batch['camera_ids'],
             #                                         batch['calibrations'],
@@ -342,12 +370,14 @@ class E2EPerceptionModule(L.LightningModule):
             #                                         imgs_dict,
             #                                         color=torch.tensor([0.0, 0.0, 255.0]))
             
-            # 4. save images
+            # 5. save images
             save_dir = os.path.join(self.config.logging.visualize_intermediate_results_dir)
             os.makedirs(save_dir, exist_ok=True)
             for camera_id in concat_imgs.keys():
                 img_name = f'{camera_id.name}_{batch_idx}.png'
                 cv2.imwrite(os.path.join(save_dir, img_name), concat_imgs[camera_id])
+            
+            exit(0)
 
         return loss_dict
     

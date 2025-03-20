@@ -101,6 +101,31 @@ class DataConfig(ConfigBase):
     ])
 
 @dataclass
+class AnchorConfig(ConfigBase):
+    """Anchor configuration"""
+    front_type: str = "div_x"
+    back_type: str = "div_x"
+    front_params: Dict[str, float] = field(default_factory=lambda: {"alpha": 0.4, "beta": 10.0, "order": 2.0})
+    back_params: Dict[str, float] = field(default_factory=lambda: {"alpha": 0.35, "beta": 10.0, "order": 2.0})
+    front_min_spacing: float = 2.0
+    front_max_distance: float = 200.0
+    back_min_spacing: float = 2.0
+    back_max_distance: float = 100.0
+    left_y_max: float = 3.75 * 2
+    right_y_max: float = 3.75 * 2
+    y_interval: float = 3.75
+
+@dataclass
+class AnchorEncoderConfig(ConfigBase):
+    """Anchor encoder configuration"""
+    position_embedding_dim: int = 128
+    dimension_embedding_dim: int = 32
+    velocity_embedding_dim: int = 64
+    yaw_embedding_dim: int = 64
+    anchor_embedding_dim: int = 256
+    anchor_generator_config: AnchorConfig = field(default_factory=AnchorConfig)
+
+@dataclass
 class DecoderConfig(ConfigBase):
     """Decoder configuration"""
     num_layers: int = 3
@@ -109,6 +134,7 @@ class DecoderConfig(ConfigBase):
     feature_dim: int = 256
     hidden_dim: int = 512
     num_points: int = 25
+    anchor_encoder_config: AnchorEncoderConfig = field(default_factory=AnchorEncoderConfig)
 
 @dataclass
 class ModelConfig(ConfigBase):

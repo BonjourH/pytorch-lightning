@@ -106,7 +106,27 @@
         "query_dim": 128,
         "feature_dim": 256,
         "hidden_dim": 512,
-        "num_points": 25
+        "num_points": 25,
+        "anchor_encoder_config": {
+          "position_embedding_dim": 128,
+          "dimension_embedding_dim": 32,
+          "velocity_embedding_dim": 64,
+          "yaw_embedding_dim": 64,
+          "anchor_embedding_dim": 256,
+          "anchor_generator_config": {
+            "front_type": "div_x",
+            "back_type": "div_x",
+            "front_params": {"alpha": 0.4, "beta": 10.0, "order": 3},
+            "back_params": {"alpha": 0.35, "beta": 10.0, "order": 3},
+            "front_min_spacing": 4.0,
+            "front_max_distance": 200.0,
+            "back_min_spacing": 4.0,
+            "back_max_distance": 100.0,
+            "left_y_max": 7.5,
+            "right_y_max": 7.5,
+            "y_interval": 3.75
+          }
+        }
       },
       "memory_efficient": 1
     },
@@ -133,7 +153,7 @@
       "use_checkpoint": true,
       "log_every_n_steps": 30,
       "check_val_every_n_epoch": 10,
-      "num_sanity_val_steps": 1,
+      "num_sanity_val_steps": 0,
       "resume": false,
       "lr_scheduler": "one_cycle"
     },
@@ -200,7 +220,7 @@
         "train/layer_1_fp_loss_exist_epoch"
       ],
       "with_checkpoint_copy_callback": false,
-      "visualize_intermediate_results": false,
+      "visualize_intermediate_results": true,
       "visualize_intermediate_results_dir": "visualize_intermediate_results",
       "point_radius": 1
     },
