@@ -1,6 +1,7 @@
 import torch
 import math
 import numpy as np
+from base import TrajParamIndex
 
 def quaternion2RotationMatix(qw, qx, qy, qz) -> torch.Tensor:
     """
@@ -139,3 +140,33 @@ def sample_bbox_edge_points(n_points_per_edge: int, include_corners: bool=True) 
     
     # Combine all points into a single tensor (3, P)
     return points
+
+def get_motion_param_range()->torch.Tensor:
+    """Get parameter ranges for normalization.
+    Returns:
+        Tensor of shape [TrajParamIndex.HEIGHT + 1, 2] containing min/max values
+    """
+    param_range = torch.zeros(TrajParamIndex.HEIGHT + 1, 2)
+    
+    # Position ranges (in meters)
+    param_range[TrajParamIndex.X] = torch.tensor([-80.0, 250.0])
+    param_range[TrajParamIndex.Y] = torch.tensor([-10.0, 10.0])
+    param_range[TrajParamIndex.Z] = torch.tensor([-3.0, 5.0])
+    
+    # Velocity ranges (in m/s)
+    param_range[TrajParamIndex.VX] = torch.tensor([-40.0, 40.0])
+    param_range[TrajParamIndex.VY] = torch.tensor([-5.0, 5.0])
+    
+    # Acceleration ranges (in m/s^2)
+    param_range[TrajParamIndex.AX] = torch.tensor([-5.0, 5.0])
+    param_range[TrajParamIndex.AY] = torch.tensor([-2.0, 2.0])
+    
+    # Yaw range (in radians)
+    param_range[TrajParamIndex.YAW] = torch.tensor([-np.pi, np.pi])
+    
+    # Dimension ranges (in meters)
+    param_range[TrajParamIndex.LENGTH] = torch.tensor([0.2, 25.0])
+    param_range[TrajParamIndex.WIDTH] = torch.tensor([0.2, 3.0])
+    param_range[TrajParamIndex.HEIGHT] = torch.tensor([0.5, 5.0])
+    
+    return param_range

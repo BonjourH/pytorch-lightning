@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from timm.models import create_model
 import os
 from base import SourceCameraId, TrajParamIndex, CameraParamIndex, EgoStateIndex, CameraType
-from utils.math_utils import generate_bbox_corners_points
+from utils.math_utils import generate_bbox_corners_points, get_motion_param_range
 from utils.pose_transform import project_points_to_image
 from e2e_dataset.dataset import MAX_TRAJ_NB
 from .anchor_generator import AnchorGenerator
@@ -166,40 +166,76 @@ class TrajectoryDecoder(nn.Module):
     
     def __init__(self,
                  num_layers: int = 6,
-                 num_queries: int = 128,
                  feature_dim: int = 256,
-                 query_dim: int = 256,
                  hidden_dim: int = 512,
-                 num_points: int = 25,
                  anchor_encoder_config: AnchorEncoderConfig = None): # Points to sample per face of the unit cube
         super().__init__()
-        self.num_queries = num_queries
-        self.query_dim = query_dim
+
+        operation_order = [
+            "temp_gnn",
+            "gnn",
+            "norm",
+            "deformable",
+            "norm",
+            "ffn",
+            "norm",
+            "refine",
+        ] * num_layers
+        # delete the 'gnn' and 'norm' layers in the first transformer blocks
+        self.operation_order = operation_order[3:]
+
+        self.op_config_map = {
+            "temp_gnn": [temp_graph_model, ATTENTION],
+            "gnn": [graph_model, ATTENTION],
+            "norm": [norm_layer, NORM_LAYERS],
+            "ffn": [ffn, FEEDFORWARD_NETWORK],
+            "deformable": [deformable_model, ATTENTION],
+            "refine": [refine_layer, PLUGIN_LAYERS],
+        }
+        self.layers = nn.ModuleList(
+            [
+                build(*self.op_config_map.get(op, [None, None]))
+                for op in self.operation_order
+            ]
+        )
+
+        def build(cfg, registry, default_args):
+            if isinstance(cfg, str):
+                cfg = registry.get(cfg)
+            if isinstance(cfg, dict):
+                cfg = registry.get(cfg.pop("type"))(**cfg)
+            return cfg
+
+        self.layers= nn.ModuleList(
+            [
+                build(*self.)
+            ]
         
-        assert num_queries <= MAX_TRAJ_NB, f"num_queries must be less than {MAX_TRAJ_NB}"
-        
-        # Object queries
-        self.pos_embeddings = nn.Embedding(num_queries, query_dim)
-        self.pos_embeddings2 = nn.Embedding(num_queries, query_dim)
+        # Object candidates: Anchors(Positional encoding) + Content queries(Content encoding)
+        self.anchor_encoder = AnchorEncoder(anchor_encoder_config)
+        self.init_trajs = nn.Parameter(self.anchor_encoder.get_init_trajs(speed=23.0))
+        self.query_dim = self.anchor_encoder.anchor_config.position_embedding_dim
+        self.num_queries = self.init_trajs.shape[0]
+        self.query_contents = nn.Embedding(self.num_queries, self.query_dim)
 
         # Register unit points
         self.register_buffer('unit_points', generate_bbox_corners_points()) # [3, 9] corners + center
         self.register_buffer('origin_point', torch.zeros(3, 1)) # [3, 1]
         
         # Parameter ranges for normalization: torch.Tensor[TrajParamIndex.HEIGHT + 1, 2]
-        ranges = self._get_motion_param_range()
+        ranges = get_motion_param_range()
         self.register_buffer('motion_min_vals', ranges[:, 0])
         self.register_buffer('motion_ranges', ranges[:, 1] - ranges[:, 0])
         
          # Single trajectory parameter head that outputs all trajectory parameters        
         self.motion_head = nn.Sequential(
-            nn.Linear(query_dim, hidden_dim),
+            nn.Linear(self.query_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, TrajParamIndex.HEIGHT + 1),
             nn.Sigmoid()
         )
         self.cls_head = nn.Sequential(
-            nn.Linear(query_dim, hidden_dim),
+            nn.Linear(self.query_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, TrajParamIndex.END_OF_INDEX - TrajParamIndex.HEIGHT - 1)
         )
@@ -207,13 +243,13 @@ class TrajectoryDecoder(nn.Module):
         self.feature_mlp = nn.Sequential(
             nn.Linear(feature_dim, hidden_dim),
             nn.ReLU(),
-            nn.Linear(hidden_dim, query_dim)
+            nn.Linear(hidden_dim, self.query_dim)
         )
         
         # Refiner layers
         self.layers = nn.ModuleList([
             TrajectoryDACTransformerLayer(
-                feature_dim=query_dim,
+                feature_dim=self.query_dim,
                 num_heads=8,
                 dim_feedforward=1024
             ) for _ in range(num_layers)
@@ -223,42 +259,6 @@ class TrajectoryDecoder(nn.Module):
         for p in self.parameters():
             if p.dim() > 1:
                 nn.init.xavier_normal_(p)
-        
-        # Anchor generator
-        self.anchor_encoder = AnchorEncoder(anchor_encoder_config)
-        self.init_trajs = nn.Parameter(self.anchor_encoder.get_init_trajs(speed=23.0))
-    
-    def _get_motion_param_range(self)->torch.Tensor:
-        """Get parameter ranges for normalization.
-        
-        Returns:
-            Tensor of shape [TrajParamIndex.HEIGHT + 1, 2] containing min/max values
-        """
-        param_range = torch.zeros(TrajParamIndex.HEIGHT + 1, 2)
-        
-        # Position ranges (in meters)
-        param_range[TrajParamIndex.X] = torch.tensor([-80.0, 250.0])
-        param_range[TrajParamIndex.Y] = torch.tensor([-10.0, 10.0])
-        param_range[TrajParamIndex.Z] = torch.tensor([-3.0, 5.0])
-        
-         # Velocity ranges (in m/s)
-        param_range[TrajParamIndex.VX] = torch.tensor([-40.0, 40.0])
-        param_range[TrajParamIndex.VY] = torch.tensor([-5.0, 5.0])
-        
-        # Acceleration ranges (in m/s^2)
-        param_range[TrajParamIndex.AX] = torch.tensor([-5.0, 5.0])
-        param_range[TrajParamIndex.AY] = torch.tensor([-2.0, 2.0])
-        
-        # Yaw range (in radians)
-        param_range[TrajParamIndex.YAW] = torch.tensor([-np.pi, np.pi])
-        
-        # Dimension ranges (in meters)
-        param_range[TrajParamIndex.LENGTH] = torch.tensor([0.2, 25.0])
-        param_range[TrajParamIndex.WIDTH] = torch.tensor([0.2, 3.0])
-        param_range[TrajParamIndex.HEIGHT] = torch.tensor([0.5, 5.0])
-        
-        return param_range
-    
     def _decode_trajectory(self, x: torch.Tensor) -> torch.Tensor:
         """ Decode trajectory from features."""
         motion_params = self.motion_head(x)
@@ -314,8 +314,17 @@ class TrajectoryDecoder(nn.Module):
         """
         # Initialize object queries position embedding
         B, T, _ = ego_states.shape
-        pos_queries = self.pos_embeddings.weight.unsqueeze(0).repeat(B, 1, 1)
-        pos_queries2 = self.pos_embeddings2.weight.unsqueeze(0).repeat(B, 1, 1)
+        # Content queries
+        content_queries = self.query_contents.weight.unsqueeze(0).repeat(B, 1, 1)
+        # Positional queries
+        trajs = self.init_trajs.unsqueeze(0).repeat(B, 1, 1)
+        pos_queries = self.anchor_encoder(trajs)
+
+        # Deformable Aggregation
+        # TODO:
+
+
+        
 
         init_trajs, o_features, o_feature_pos = self._sample_features_by_queries(pos_queries, features_dict, calibrations, ego_states)
         c_features, c_feature_pos = o_features, o_feature_pos
@@ -351,3 +360,135 @@ class TrajectoryDecoder(nn.Module):
             # c_decoder_outputs.append(c_trajs)
             
         return o_decoder_outputs, c_decoder_outputs
+
+
+class DecoupledSelfAttention(nn.Module):
+    """
+    Decoupled attention in Sparse4D.
+    """
+    def __init__(self, feature_dim: int = 256, num_heads: int = 8):
+        super().__init__()
+        self.value_linear = nn.Linear(feature_dim, feature_dim * 2, bias=False)
+        self.query_linear = nn.Linear(feature_dim * 2, feature_dim, bias=False)
+        self.attn = nn.MultiheadAttention(feature_dim, num_heads, batch_first=True)
+
+    def forward(self, query: torch.Tensor, pos_query: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            query: Tensor[B, N, query_dim]
+            pos_query: Tensor[B, N, query_dim]
+
+        Returns:
+            Tensor[B, N, query_dim]
+        """
+        tgt = torch.cat([query, pos_query], dim=1) # [B, 2N, query_dim]
+        v = self.value_linear(tgt) # [B, 2N, value_dim]
+        
+        # self-attention
+        tgt = self.attn(tgt, tgt, v)[0] # [B, 2N, value_dim]
+        tgt = self.query_linear(tgt) # [B, 2N, query_dim]
+        return tgt
+
+
+class DecoupledCrossAttention(nn.Module):
+    """
+    Decoupled cross-attention in Sparse4D.
+    """
+    def __init__(self, feature_dim: int = 256, num_heads: int = 8):
+        super().__init__()
+        self.value_linear = nn.Linear(feature_dim, feature_dim * 2, bias=False)
+        self.query_linear = nn.Linear(feature_dim * 2, feature_dim, bias=False)
+        self.attn = nn.MultiheadAttention(feature_dim, num_heads, batch_first=True)
+
+    def forward(self, tgt: torch.Tensor, pos_tgt: torch.Tensor, memory: torch.Tensor, pos_memory: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            tgt: Tensor[B, N, query_dim], current query
+            pos_tgt: Tensor[B, N, query_dim], current query position encoding
+            memory: Tensor[B, M, query_dim], tracked query
+            pos_memory: Tensor[B, M, query_dim], tracked query position encoding
+
+        Returns:
+            Tensor[B, N, query_dim]
+        """
+
+        tgt = torch.cat([tgt, memory], dim=1) # [B, N + M, query_dim]
+        pos_tgt = torch.cat([pos_tgt, pos_memory], dim=1) # [B, N + M, query_dim]
+
+        q = torch.cat([tgt, pos_tgt], dim=2) # [B, N + M, 2 * query_dim] 
+        k = torch.cat([memory, pos_memory], dim=2) # [B, M, 2 * query_dim]
+        v = self.value_linear(memory) # [B, M, 2 * query_dim]
+
+        tgt = self.attn(q, k, v)[0] # [B, N + M, 2 * query_dim]
+        tgt = self.query_linear(tgt) # [B, N + M, query_dim]
+        return tgt
+
+
+class TrajectoryDecoderLayer(nn.Module):
+    """
+    Trajectory Decoder Layer.
+    This layer implements the Decoder Layer in Sparse4D.
+    It contains 4 parts:
+    1. Cross-attention with tracked queries
+    2. Self-attention within the updated queries
+    3. Deformable Aggregation(sample features from features_dict), which generates new queries
+    4. FFN to predict the refined anchor and classification scores
+    5. Optional: chose topK anchors and refine them again
+    """
+    def __init__(self,
+                 enable_self_attn: bool = True,
+                 enable_cross_attn: bool = True,
+                 feature_dim: int = 256,
+                 num_heads: int = 8,
+                 dim_feedforward: int = 1024,
+                 dropout: float = 0.1
+                 ):
+        super().__init__()
+        self.enable_self_attn = enable_self_attn
+        self.enable_cross_attn = enable_cross_attn
+        self.self_attn = DecoupledSelfAttention(feature_dim, num_heads) if enable_self_attn else None
+        self.cross_attn = DecoupledCrossAttention(feature_dim, num_heads) if enable_cross_attn else None
+
+    def forward(self, 
+                features_dict: List[torch.Tensor],
+                calibrations: torch.Tensor,
+                ego_states: torch.Tensor,
+                trajs: torch.Tensor,
+                trajs_embed: torch.Tensor,
+                content_queries: torch.Tensor,
+                predicted_trajs: Optional[torch.Tensor] = None,
+                predicted_trajs_embed: Optional[torch.Tensor] = None,
+                predicted_content_queries: Optional[torch.Tensor] = None,
+                ) -> List[torch.Tensor]:
+        """
+        Args:
+            features_dict: List[Tensor[B, T, C, H, W]] of length N_cams, we don't cat them together 
+                           cause we customize the feature map size for each camera
+            calibrations: Tensor[B, N_cams, CameraParamIndex.END_OF_INDEX]
+            ego_states: Tensor[B, T, EgoStateIndex.END_OF_INDEX]
+            trajs: Tensor[B, num_queries, TrajParamIndex.END_OF_INDEX]
+            trajs_embed: Tensor[B, num_queries, query_dim], current query position encoding
+            content_queries: Tensor[B, num_queries, query_dim], current query content encoding
+            predicted_trajs: Tensor[B, num_queries, TrajParamIndex.END_OF_INDEX], predicted query
+            predicted_trajs_embed: Tensor[B, num_queries, query_dim], predicted query position encoding
+            predicted_content_queries: Tensor[B, num_queries, query_dim], predicted query content encoding
+            
+        Returns:
+            List of trajectory parameter tensors [B, num_queries, TrajParamIndex.END_OF_INDEX]
+        """
+        tgt = content_queries
+        # 1. Cross-attention with predicted queries
+        if self.enable_cross_attn:
+            tgt = self.cross_attn(content_queries, trajs_embed, predicted_content_queries, predicted_trajs_embed)
+                
+        # 2. Self-attention within the updated queries
+        if self.enable_self_attn:
+            tgt = self.self_attn(tgt, trajs_embed)
+            
+        # 3. Deformable Aggregation
+        pass
+        # 4. FFN to predict the refined anchor and classification scores
+        pass
+        # 5. Optional: chose topK anchors and refine them again
+        pass
+        
