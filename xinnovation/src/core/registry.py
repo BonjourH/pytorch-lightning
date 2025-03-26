@@ -2,6 +2,8 @@
 from typing import Dict, Any, Callable, Optional, Type, Union, List
 import inspect
 from collections import defaultdict
+from omegaconf import DictConfig
+from .config import Config
 
 class Registry:
     """模块化组件注册中心（支持多级嵌套结构）
@@ -91,14 +93,9 @@ class Registry:
         """
         return self._group_dict[group_name]
 
-    def build(self, cfg: Union[Dict, Type], *args, **kwargs) -> Any:
+    def build(self, cfg: Union[Dict, Type, DictConfig, Config], *args, **kwargs) -> Any:
         """根据配置构建实例（核心方法）"""
-        if cfg is None:
-            return None
-            
-        # 直接处理类或实例
-        if not isinstance(cfg, dict):
-            return cfg(*args, **kwargs) if inspect.isclass(cfg) else cfg
+        assert isinstance(cfg, (dict, Type, DictConfig, Config)), "cfg must be a dict or Type or DictConfig or Config"
             
         cfg = cfg.copy()
         obj_type = cfg.pop("type")
@@ -110,11 +107,20 @@ class Registry:
         
         try:
             obj_cls = self.get(obj_type)
-            # 递归构建嵌套配置
-            for k, v in cfg.items():
-                if isinstance(v, dict) and "type" in v:
-                    cfg[k] = self.build(v)
             return obj_cls(*args, **kwargs, **cfg)
+
+            # # 递归构建嵌套配置
+            # for k, v in cfg.items():
+            #     # 检查是否存在对应的子注册表
+            #     if k in self._children and isinstance(v, dict):
+            #         cfg[k] = self._children[k].build(v)
+            #    # 处理普通的嵌套字典配置
+            #     elif isinstance(v, dict) and "type" in v:
+            #         cfg[k] = self.build(v)
+            #     # 处理列表中的嵌套配置
+            #     elif isinstance(v, list):
+            #         cfg[k] = [self.build(item) if isinstance(item, dict) else item for item in v]
+            # return obj_cls(*args, **kwargs, **cfg)
         except RuntimeError:
             # 直接重新抛出循环依赖错误
             raise
@@ -139,22 +145,23 @@ class Registry:
         return list(self._module_dict.keys())
 
 # LIGHTNING (顶层)
-# ├── MODEL
-# │   ├── BACKBONES          # 骨干网络 (ResNet, SwinTransformer, PointNet++)
-# │   ├── NECKS              # 特征融合 (FPN, BiFPN, ASFF)
-# │   ├── HEADS              # 任务头 (DetectionHead, ClassificationHead)
+# ├── LIGHTNING_MODULE
+# │   ├── OPTIMIZERS         # 优化器 (SGD, AdamW, Lion)
+# │   ├── SCHEDULERS         # 学习率策略 (StepLR, CosineAnnealingLR)
 # │   ├── LOSSES             # 损失函数 (FocalLoss, SmoothL1, DiceLoss)
-# │   ├── ATTENTION          # 注意力机制 (SelfAttention, CBAM, TransformerBlock)
-# │   ├── NORM_LAYERS        # 归一化层 (BatchNorm, LayerNorm, GroupNorm)
-# │   └── POS_ENCODING       # 位置编码 (SineEncoding, LearnedEncoding)
+# │   ├── DETECTORS          # 检测器 (YOLO, SSD, FasterRCNN)
+# │   │   ├── BACKBONES          # 骨干网络 (ResNet, SwinTransformer, PointNet++)
+# │   │   ├── NECKS              # 特征融合 (FPN, BiFPN, ASFF)
+# │   │   ├── HEADS              # 任务头 (DetectionHead, ClassificationHead)
+# │   │   ├── ATTENTION          # 注意力机制 (SelfAttention, CBAM, TransformerBlock)
+# │   │   ├── NORM_LAYERS        # 归一化层 (BatchNorm, LayerNorm, GroupNorm)
+# │   │   └── POS_ENCODING       # 位置编码 (SineEncoding, LearnedEncoding)
 # ├── DATA
 # │   ├── DATASETS           # 数据集 (ImageNet, COCO, KITTI, nuScenes)
 # │   ├── TRANSFORMS         # 数据增强 (RandomFlip, Normalize, ColorJitter)
 # │   ├── SAMPLERS           # 数据采样 (BalancedSampler, WeightedRandomSampler)
 # │   └── LOADERS            # 数据加载策略 (Dataloader, PrefetchLoader)
 # ├── TRAINER
-# │   ├── OPTIMIZERS         # 优化器 (SGD, AdamW, Lion)
-# │   ├── SCHEDULERS         # 学习率策略 (StepLR, CosineAnnealingLR)
 # │   ├── CALLBACKS          # 训练回调 (Checkpoint, EarlyStopping, GradientClipping)
 # │   ├── LOGGERS            # 训练日志 (TensorBoard, WandB, CSVLogger)
 # │   └── STRATEGIES         # 并行训练策略 (DDP, DeepSpeed, FSDP)
@@ -181,23 +188,26 @@ class Registry:
 LIGHTNING = Registry("lightning")
 
 # ==========================================
-#                模型组件
+#               模型体系 (LightningModule)
 # ==========================================
-MODEL = LIGHTNING.create_child("model")
+LIGHTNING_MODULE = LIGHTNING.create_child("lightning_module")
 
-# 主要模块
-BACKBONES = MODEL.create_child("backbone")  # 骨干网络 (ResNet, SwinTransformer, PointNet++)
-NECKS = MODEL.create_child("neck")          # 特征融合 (FPN, BiFPN, ASFF)
-HEADS = MODEL.create_child("head")          # 任务头 (DetectionHead, ClassificationHead)
-LOSSES = MODEL.create_child("loss")         # 损失函数 (FocalLoss, SmoothL1, DiceLoss)
+# ---- 优化体系 (集成到模型中) ----
+OPTIMIZERS = LIGHTNING_MODULE.create_child("optimizer")  # 优化器注册 (SGD, AdamW, Lion)
+SCHEDULERS = LIGHTNING_MODULE.create_child("scheduler")  # 调度器注册 (StepLR, CosineAnnealingLR)
+LOSSES = LIGHTNING_MODULE.create_child("loss")       # 损失函数注册 (FocalLoss, SmoothL1, DiceLoss)
 
-# 其他常用模块
-ATTENTION = MODEL.create_child("attention")     # 注意力机制 (SelfAttention, CBAM, TransformerBlock)
-NORM_LAYERS = MODEL.create_child("norm_layer")  # 归一化层 (BatchNorm, LayerNorm, GroupNorm)
-POS_ENCODING = MODEL.create_child("pos_encoding")  # 位置编码 (SineEncoding, LearnedEncoding)
+# ---- 核心组件(检测器) ----
+DETECTORS = LIGHTNING_MODULE.create_child("detector")  # 检测器 (YOLO, SSD, FasterRCNN)
+BACKBONES = DETECTORS.create_child("backbone")  # 骨干网络 (ResNet, SwinTransformer, PointNet++)
+NECKS = DETECTORS.create_child("neck")          # 特征融合 (FPN, BiFPN, ASFF)
+HEADS = DETECTORS.create_child("head")          # 任务头 (DetectionHead, ClassificationHead)
+ATTENTIONS = DETECTORS.create_child("attention")     # 注意力机制 (SelfAttention, CBAM, TransformerBlock)
+NORM_LAYERS = DETECTORS.create_child("norm_layer")  # 归一化层 (BatchNorm, LayerNorm, GroupNorm)
+POS_ENCODINGS = DETECTORS.create_child("pos_encoding")  # 位置编码 (SineEncoding, LearnedEncoding)
 
 # ==========================================
-#                数据组件
+#                数据体系 (LightningDataModule)
 # ==========================================
 DATA = LIGHTNING.create_child("data")
 
@@ -211,8 +221,6 @@ LOADERS = DATA.create_child("loader")       # 数据加载策略 (Dataloader, Pr
 # ==========================================
 TRAINER = LIGHTNING.create_child("trainer")
 
-OPTIMIZERS = TRAINER.create_child("optimizer")  # 优化器 (SGD, AdamW, Lion)
-SCHEDULERS = TRAINER.create_child("scheduler")  # 学习率策略 (StepLR, CosineAnnealingLR)
 CALLBACKS = TRAINER.create_child("callback")    # 训练回调 (Checkpoint, EarlyStopping, GradientClipping)
 LOGGERS = TRAINER.create_child("logger")        # 训练日志 (TensorBoard, WandB, CSVLogger)
 STRATEGIES = TRAINER.create_child("strategy")   # 并行训练策略 (DDP, DeepSpeed, FSDP)
@@ -245,121 +253,3 @@ MULTIMODAL = LIGHTNING.create_child("multimodal")
 FUSION = MULTIMODAL.create_child("fusion")          # 特征融合策略 (Late Fusion, Attention Fusion)
 ALIGNMENT = MULTIMODAL.create_child("alignment")    # 模态对齐 (Cross-Modal Contrastive Learning)
 EMBEDDING = MULTIMODAL.create_child("embedding")    # 跨模态嵌入 (CLIP, ALIGN, ImageBind)
-
-
-if __name__ == "__main__":
-    import torch
-    import torch.nn as nn
-    from lightning.pytorch import LightningModule
-    
-    # 测试1: 注册和构建基础组件
-    @BACKBONES.register_module()
-    class ResNet(nn.Module):
-        def __init__(self, depth=50, pretrained=None):
-            super().__init__()
-            self.depth = depth
-            self.pretrained = pretrained
-            
-        def forward(self, x):
-            return x
-    
-    # 测试2: 注册带分组的组件
-    @HEADS.register_module(group="detection")
-    class DetectionHead(nn.Module):
-        def __init__(self, in_channels, num_classes):
-            super().__init__()
-            self.in_channels = in_channels
-            self.num_classes = num_classes
-            
-        def forward(self, x):
-            return x
-    
-    # 测试3: 注册多模态组件
-    @FUSION.register_module()
-    class FeatureFusion(nn.Module):
-        def __init__(self, fusion_type="concat"):
-            super().__init__()
-            self.fusion_type = fusion_type
-            
-        def forward(self, x1, x2):
-            return x1 + x2
-    
-    # 测试4: 注册部署相关组件
-    @CONVERTERS.register_module()
-    class ONNXConverter:
-        def __init__(self, opset_version=11):
-            self.opset_version = opset_version
-            
-        def convert(self, model, dummy_input):
-            return model
-    
-    # 测试5: 注册评估组件
-    @METRICS.register_module()
-    class MeanAP:
-        def __init__(self, iou_threshold=0.5):
-            self.iou_threshold = iou_threshold
-            
-        def compute(self, pred, target):
-            return 0.95
-    
-    # 测试用例执行
-    print("\n=== 测试1: 基础组件注册和构建 ===")
-    backbone_cfg = {"type": "ResNet", "depth": 101}
-    backbone = BACKBONES.build(backbone_cfg)
-    print(f"构建的backbone: {backbone}")
-    
-    print("\n=== 测试2: 分组功能 ===")
-    detection_heads = HEADS.get_group("detection")
-    print(f"检测头组件: {detection_heads}")
-    
-    print("\n=== 测试3: 多模态组件 ===")
-    fusion_cfg = {"type": "FeatureFusion", "fusion_type": "concat"}
-    fusion = FUSION.build(fusion_cfg)
-    print(f"构建的特征融合模块: {fusion}")
-    
-    print("\n=== 测试4: 部署组件 ===")
-    converter_cfg = {"type": "ONNXConverter", "opset_version": 12}
-    converter = CONVERTERS.build(converter_cfg)
-    print(f"构建的转换器: {converter}")
-    
-    print("\n=== 测试5: 评估组件 ===")
-    metric_cfg = {"type": "MeanAP", "iou_threshold": 0.5}
-    metric = METRICS.build(metric_cfg)
-    print(f"构建的评估指标: {metric}")
-    
-    print("\n=== 测试6: 循环依赖检测 ===")
-    try:
-        cyclic_cfg = {
-            "type": "ResNet",
-            "backbone": {
-                "type": "ResNet",
-                "backbone": {
-                    "type": "ResNet"
-                }
-            }
-        }
-        BACKBONES.build(cyclic_cfg)
-    except RuntimeError as e:
-        print(f"成功捕获循环依赖: {e}")
-    except Exception as e:
-        print(f"发生其他错误: {e}")
-    
-    print("\n=== 测试7: 注册表信息 ===")
-    print(f"MODEL注册表: {MODEL}")
-    print(f"可用组件: {MODEL.get_registered_modules()}")
-    
-    print("\n=== 测试8: 嵌套配置构建 ===")
-    model_cfg = {
-        "type": "DetectionModel",
-        "backbone": {
-            "type": "ResNet",
-            "depth": 50
-        },
-        "head": {
-            "type": "DetectionHead",
-            "in_channels": 2048,
-            "num_classes": 80
-        }
-    }
-    print(f"嵌套配置示例: {model_cfg}")
-    

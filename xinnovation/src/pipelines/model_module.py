@@ -12,13 +12,13 @@ from torchmetrics import Accuracy, MeanSquaredError
 import torchvision.utils
 
 from ..registry import (
-    MODEL, BACKBONES, NECKS, HEADS,
+    LIGHTNING_MODULE, BACKBONES, NECKS, HEADS,
     LOSSES, METRICS,
     OPTIMIZERS, SCHEDULERS
 )
 
 
-@MODEL.register_module()
+@LIGHTNING_MODULE.register_module()
 class LightningModelModule(pl.LightningModule):
     """
     Base Lightning Module with enhanced functionality.

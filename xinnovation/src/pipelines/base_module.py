@@ -12,7 +12,7 @@ import pytorch_lightning as pl
 from e2e_perception.src.utils.registry import MODEL, LOSSES
 
 
-@MODEL.register()
+@LIGHTNING_MODULE.register()
 class BaseModule(pl.LightningModule):
     """
     Base Lightning Module for perception tasks.
