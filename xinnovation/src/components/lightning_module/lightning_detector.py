@@ -9,11 +9,15 @@ from easydict import EasyDict as edict
 
 @LIGHTNING_MODULE.register_module()
 class LightningDetector(pl.LightningModule):
-    def __init__(self, detector: Dict, loss: Dict, optimizer: Dict, scheduler: Dict):
+    def __init__(self, detector: Dict, loss: Dict, optimizer: Dict, scheduler: Dict, **kwargs):
         """Initialize LightningDetector module
         
         Args:
-            lightning_module_cfg (Dict): Configuration dictionary for the detector
+            detector (Dict): Configuration dictionary for detector
+            loss (Dict): Configuration dictionary for loss
+            optimizer (Dict): Configuration dictionary for optimizer
+            scheduler (Dict): Configuration dictionary for scheduler
+            **kwargs: Additional arguments
         """
         super().__init__()
         self.save_hyperparameters()

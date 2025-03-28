@@ -84,7 +84,13 @@ class MockLoss(nn.Module):
 @pytest.fixture
 def lightning_detector():
     """Create a LightningDetector instance for testing"""
-    lightning_module = LightningDetector(lightning_module_cfg)
+    config = lightning_module_cfg
+    lightning_module = LightningDetector(
+        detector=config['detector'],
+        loss=config['loss'],
+        optimizer=config['optimizer'],
+        scheduler=config['scheduler']
+    )
     lightning_module.configure_optimizers()
     return lightning_module
 
@@ -142,7 +148,12 @@ def test_custom_hyperparameters(lr, step_size, gamma):
     custom_cfg['scheduler']['gamma'] = gamma
     
     # Create model with custom config
-    model = LightningDetector(custom_cfg)
+    model = LightningDetector(
+        detector=custom_cfg['detector'],
+        loss=custom_cfg['loss'],
+        optimizer=custom_cfg['optimizer'],
+        scheduler=custom_cfg['scheduler']
+    )
     optim_dict = model.configure_optimizers()
     
     # Check that hyperparameters were set correctly
@@ -181,8 +192,14 @@ if __name__ == "__main__":
     
     try:
         
-        # Create model using Dict directly
-        model = LightningDetector(lightning_module_cfg)
+        # Create model using unpacked parameters
+        config = lightning_module_cfg
+        model = LightningDetector(
+            detector=config['detector'],
+            loss=config['loss'],
+            optimizer=config['optimizer'],
+            scheduler=config['scheduler']
+        )
         optim_dict = model.configure_optimizers()
         print("\nBasic test results:")
         print("-" * 50)

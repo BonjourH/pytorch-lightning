@@ -19,8 +19,8 @@ __all__ = ["Sparse4DModule"]
 @LIGHTNING_MODULE.register_module()
 class Sparse4DModule(LightningDetector):
     
-    def __init__(self, detector: Dict, loss: Dict, optimizer: Dict, scheduler: Dict):
-        super().__init__(detector=detector, loss=loss, optimizer=optimizer, scheduler=scheduler)
+    def __init__(self, detector: Dict, loss: Dict, optimizer: Dict, scheduler: Dict, **kwargs):
+        super().__init__(detector=detector, loss=loss, optimizer=optimizer, scheduler=scheduler, **kwargs)
 
         self.predictions = []
         

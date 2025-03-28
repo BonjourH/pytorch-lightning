@@ -4,6 +4,7 @@ from typing import Dict, Optional, Union, Any
 from xinnovation.src.core.registry import DETECTORS
 from easydict import EasyDict as edict
 
+__all__ = ["Sparse4DDetector"]
 
 @DETECTORS.register_module()
 class Sparse4DDetector(nn.Module):
