@@ -15,5 +15,8 @@ test-builder:
 test-lightning-detector:
 	python -m pytest -v tests/test_lightning_detector.py
 
+test-loss-functions:
+	python -m pytest -v tests/test_loss_functions.py
+
 test-coverage:
 	python -m pytest -v --cov=xinnovation tests/

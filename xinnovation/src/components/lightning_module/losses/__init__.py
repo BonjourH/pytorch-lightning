@@ -1,3 +1,3 @@
-from .focal_loss import FocalLoss
+from .classification import FocalLoss
 
 __all__ = ['FocalLoss'] 
