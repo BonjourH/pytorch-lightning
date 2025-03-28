@@ -27,7 +27,7 @@ lightning_module = dict(
         weight_decay=0.0001
     ),
     loss=dict(
-        type="Sparse4DLoss",
+        type="Sparse4DLossWithDAC",
         layer_loss_weights=[0.5, 0.5],
         loss_cls=dict(
             type="FocalLoss",
