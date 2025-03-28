@@ -18,5 +18,8 @@ test-lightning-detector:
 test-loss-functions:
 	python -m pytest -v tests/test_loss_functions.py
 
+test-regression-losses:
+	python -m pytest -v tests/test_regression_losses.py
+
 test-coverage:
 	python -m pytest -v --cov=xinnovation tests/
