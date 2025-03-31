@@ -63,6 +63,12 @@ class Sparse4DLossWithDAC(nn.Module):
         indices = []
         for b in range(B):
             indices.append(linear_sum_assignment(cost_matrix[b].detach().cpu().numpy()))
+        # 3. remove the fp matches(M trajs is the pre-defined number of gt trajs, however, the real number of gt trajs is less than M)
+        gt_trajs_mask = gt_trajs[:, :, TrajParamIndex.HAS_OBJECT] > 0.5 # (B, M)
+        for b in range(B):
+            for pred_idx, gt_idx in indices[b]:
+                if not gt_trajs_mask[b, gt_idx]:
+                    indices[b].remove((pred_idx, gt_idx))
         return indices
 
     def forward(self, gt_trajs: torch.Tensor, outputs: List[torch.Tensor], c_outputs: List[torch.Tensor]=None) -> Dict[str, torch.Tensor]:
@@ -79,23 +85,63 @@ class Sparse4DLossWithDAC(nn.Module):
         """
         losses = {}
 
+        B, N, M = gt_trajs.shape[0], gt_trajs.shape[1], outputs[0].shape[1]
+
         # 1. Add loss of standard decoders
         for idx, pred_trajs in enumerate(outputs):
+            indices = self._compute_hungarian_match_results(pred_trajs, gt_trajs)
             if idx not in self.matching_history:
                 self.matching_history[idx] = []
-            indices = self._compute_hungarian_match_results(pred_trajs, gt_trajs)
             self.matching_history[idx].append(indices[0]) # only record the first batch of different layers
-            for indice in indices:
-                # TODO: calculate the loss
-                # layer_losses = self._compute_losses_with_indices(
-                #     pred_trajs=pred_trajs_b,
-                #     gt_trajs=gt_trajs_b,
-                #     indices=indices,
-                #     prefix=f'layer_{idx}_'
-                # )
-                # losses.update(layer_losses)
-                pass
- 
+            
+            # 收集所有batch中匹配的预测和真实轨迹
+            matched_preds = []
+            matched_gts = []
+            
+            # 创建mask来标识未匹配的预测轨迹
+            unmatched_mask = torch.ones(B, N, dtype=torch.bool, device=pred_trajs.device)
+            
+            # 收集匹配的轨迹和标记未匹配的轨迹
+            for b, indice in enumerate(indices):
+                pred_idx, gt_idx = indice
+                # 收集匹配的轨迹
+                matched_preds.append(pred_trajs[b, pred_idx])
+                matched_gts.append(gt_trajs[b, gt_idx])
+                
+                # 标记已匹配的轨迹
+                unmatched_mask[b, pred_idx] = False
+            
+            # 堆叠所有匹配的轨迹
+            if matched_preds:  # 如果存在匹配的轨迹
+                matched_preds = torch.cat(matched_preds, dim=0)  # [total_matches, TrajParamIndex.END_OF_INDEX]
+                matched_gts = torch.cat(matched_gts, dim=0)      # [total_matches, TrajParamIndex.END_OF_INDEX]
+                
+                # 计算匹配轨迹的losses (true positives)
+                # 分类loss
+                cls_loss = F.binary_cross_entropy_with_logits(
+                    matched_preds[:, TrajParamIndex.HAS_OBJECT],
+                    matched_gts[:, TrajParamIndex.HAS_OBJECT]
+                )
+                losses[f'layer_{idx}_cls_loss'] = cls_loss
+                
+                # 回归loss
+                reg_loss = F.smooth_l1_loss(
+                    matched_preds[:, TrajParamIndex.X:TrajParamIndex.END_OF_INDEX],
+                    matched_gts[:, TrajParamIndex.X:TrajParamIndex.END_OF_INDEX]
+                )
+                losses[f'layer_{idx}_reg_loss'] = reg_loss
+            
+            # 获取所有未匹配的预测轨迹
+            unmatched_preds = pred_trajs[unmatched_mask]  # [total_unmatched, TrajParamIndex.END_OF_INDEX]
+            
+            # 计算未匹配轨迹的losses (false positives)
+            if len(unmatched_preds) > 0:
+                fp_cls_loss = F.binary_cross_entropy_with_logits(
+                    unmatched_preds[:, TrajParamIndex.HAS_OBJECT],
+                    torch.zeros_like(unmatched_preds[:, TrajParamIndex.HAS_OBJECT])
+                )
+                losses[f'layer_{idx}_fp_cls_loss'] = fp_cls_loss
+        
         # 2. Add loss of cross-attention decoder
         if c_outputs is not None:
             for idx, pred_trajs in enumerate(c_outputs[1:]):
