@@ -31,7 +31,7 @@ class Sparse4DLossWithDAC(nn.Module):
             
         Intermediate_results:
             cls_cost: Classification cost matrix [B, N, M]
-            center_loss_matrix: Center loss matrix [B, N, M]
+            center_cost: Center loss matrix [B, N, M]
             cost_matrix: Matching cost matrix [B, N, M]
         
         Returns:
@@ -41,19 +41,24 @@ class Sparse4DLossWithDAC(nn.Module):
         B, N, M = pred_trajs.shape[0], pred_trajs.shape[1], gt_trajs.shape[1]
         # 1. calculate the cost matrix
         # 1.1 calculate the cregression loss, of shape [B, N, M]
-        center_dist_matrix = torch.cdist(pred_trajs[:, :, TrajParamIndex.X:TrajParamIndex.Z+1], gt_trajs[:, :, TrajParamIndex.X:TrajParamIndex.Z+1], p=1)
-        center_loss_matrix = 1 - torch.exp(-center_dist_matrix / 30) # (B, N, M)
-        # velocity_diff_matrix = torch.cdist(pred_trajs[:, :, TrajParamIndex.VX:TrajParamIndex.VY+1], gt_trajs[:, :, TrajParamIndex.VX:TrajParamIndex.VY+1], p=1)
-        # dimension_diff_matrix = torch.cdist(pred_trajs[:, :, TrajParamIndex.LENGTH:TrajParamIndex.HEIGHT+1], gt_trajs[:, :, TrajParamIndex.LENGTH:TrajParamIndex.HEIGHT+1], p=1)
+        center_cost = torch.cdist(pred_trajs[:, :, TrajParamIndex.X:TrajParamIndex.Z+1], gt_trajs[:, :, TrajParamIndex.X:TrajParamIndex.Z+1], p=1)
+        center_cost = 1 - torch.exp(-center_cost / 30) # (B, N, M)
+        velocity_cost = torch.cdist(pred_trajs[:, :, TrajParamIndex.VX:TrajParamIndex.VY+1], gt_trajs[:, :, TrajParamIndex.VX:TrajParamIndex.VY+1], p=2)
+        velocity_cost = 0.5 * (1 + torch.tanh(10 * (velocity_cost - 2))) # (B, N, M)
+        dimension_cost = torch.cdist(pred_trajs[:, :, TrajParamIndex.LENGTH:TrajParamIndex.HEIGHT+1], gt_trajs[:, :, TrajParamIndex.LENGTH:TrajParamIndex.HEIGHT+1], p=2)
+        dimension_cost = 0.5 * (1 + torch.tanh(10 * (dimension_cost - 2))) # (B, N, M)
         # giou_loss_matrix = 0 # TODO: define the giou loss in 4D space(two trajectories)
-        # 1.2 calculate the classification loss(only consider the attribute HAS_OBJECT)
-        cls_cost = compute_cls_cost_matrix(pred_trajs, gt_trajs) # (B, N, M)
-        
-        # type_classification_loss_matrix = F.binary_cross_entropy(pred_trajs[:, :, TrajParamIndex.TYPE], gt_trajs[:, :, TrajParamIndex.TYPE])
-        # 1.4 calculate the composite loss
-        # composite_loss_matrix = center_dist_matrix # + velocity_diff_matrix + dimension_diff_matrix + giou_loss_matrix + type_classification_loss_matrix + uncertainty_loss_matrix
-        cost_matrix = cls_cost * 0.5 + center_loss_matrix * 0.5
+        regression_cost = center_cost * 0.7 + velocity_cost * 0.2 + dimension_cost * 0.1
 
+        # NOTE: cost function choice
+        # 1. center_cost use `1 - exp(-center_cost / 30)`, which is sensitive to small center distance but not sensitive to large center distance
+        # 2. velocity_cost use `0.5 * (1 + tanh(10 * (velocity_cost - 2)))`, which is sensitive to small velocity difference but not sensitive to large velocity difference
+        # 3. dimension_cost use `0.5 * (1 + tanh(10 * (dimension_cost - 2)))`, which is sensitive to small dimension difference but not sensitive to large dimension difference
+
+        # 1.2 calculate the classification loss(only consider the attribute HAS_OBJECT)
+        cls_cost = compute_has_object_cls_cost_matrix(pred_trajs, gt_trajs) # (B, N, M)
+        # 1.4 calculate the composite loss
+        cost_matrix = cls_cost * 0.5 + regression_cost * 0.5
         # 2. calculate the indices
         indices = []
         for b in range(B):
@@ -107,7 +112,7 @@ class Sparse4DLossWithDAC(nn.Module):
         losses['loss'] = sum(losses.values())
         return losses
 
-def compute_cls_cost_matrix(pred_trajs: torch.Tensor, gt_trajs: torch.Tensor) -> torch.Tensor:
+def compute_has_object_cls_cost_matrix(pred_trajs: torch.Tensor, gt_trajs: torch.Tensor) -> torch.Tensor:
     """Compute classification cost matrix between predictions and ground truth using Focal Loss.
     
     Args:

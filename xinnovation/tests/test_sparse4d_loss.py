@@ -1,6 +1,6 @@
 import pytest
 import torch
-from xinnovation.examples.detector4D.sparse4d_loss import Sparse4DLossWithDAC, compute_cls_cost_matrix
+from xinnovation.examples.detector4D.sparse4d_loss import Sparse4DLossWithDAC, compute_has_object_cls_cost_matrix
 from xinnovation.src.core import TrajParamIndex
 
 @pytest.fixture
@@ -23,9 +23,7 @@ def test_compute_cls_cost_matrix():
     gt_trajs[0, 1, TrajParamIndex.HAS_OBJECT] = 0.0    # Negative
     gt_trajs[0, 2, TrajParamIndex.HAS_OBJECT] = 1.0    # Positive
     
-    cost_matrix = compute_cls_cost_matrix(pred_trajs, gt_trajs)
-
-    print(cost_matrix)
+    cost_matrix = compute_has_object_cls_cost_matrix(pred_trajs, gt_trajs)
     
     # Check shape
     assert cost_matrix.shape == (B, N, M)
@@ -52,7 +50,7 @@ def test_compute_cls_cost_matrix():
     gt_trajs[1, 1, TrajParamIndex.HAS_OBJECT] = 1.0    # Positive
     gt_trajs[1, 2, TrajParamIndex.HAS_OBJECT] = 0.0    # Negative
     
-    cost_matrix = compute_cls_cost_matrix(pred_trajs, gt_trajs)
+    cost_matrix = compute_has_object_cls_cost_matrix(pred_trajs, gt_trajs)
     
     # Check shape
     assert cost_matrix.shape == (B, N, M)
@@ -72,7 +70,7 @@ def test_compute_cls_cost_matrix():
     gt_trajs[0, 1, TrajParamIndex.HAS_OBJECT] = 0.0    # Negative
     gt_trajs[0, 2, TrajParamIndex.HAS_OBJECT] = 1.0    # Positive
     
-    confident_cost_matrix = compute_cls_cost_matrix(pred_trajs, gt_trajs)
+    confident_cost_matrix = compute_has_object_cls_cost_matrix(pred_trajs, gt_trajs)
     
     # Check that correct high confidence predictions have low cost
     assert confident_cost_matrix[0, 0, 0] < 0.1  # Positive prediction matching positive ground truth
@@ -90,7 +88,7 @@ def test_compute_cls_cost_matrix():
     gt_trajs[0, 1, TrajParamIndex.HAS_OBJECT] = 0.0    # Negative
     gt_trajs[0, 2, TrajParamIndex.HAS_OBJECT] = 1.0    # Positive
     
-    uncertain_cost_matrix = compute_cls_cost_matrix(pred_trajs, gt_trajs)
+    uncertain_cost_matrix = compute_has_object_cls_cost_matrix(pred_trajs, gt_trajs)
     
     # Check that uncertain predictions have higher costs than confident ones
     assert uncertain_cost_matrix[0, 0, 0] > confident_cost_matrix[0, 0, 0]  # Uncertain positive should have higher cost than confident positive
