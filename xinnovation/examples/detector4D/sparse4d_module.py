@@ -7,7 +7,7 @@ from xinnovation.src.core import LIGHTNING_MODULE, SourceCameraId
 from xinnovation.src.components.lightning_module import LightningDetector
 from xinnovation.src.utils.math_utils import sample_bbox_edge_points
 from .sparse4d_detector import Sparse4DDetector
-from .sparse4d_loss import Sparse4DLoss
+from .sparse4d_loss import Sparse4DLossWithDAC
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt

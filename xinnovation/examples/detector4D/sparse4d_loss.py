@@ -48,7 +48,7 @@ class Sparse4DLossWithDAC(nn.Module):
         # giou_loss_matrix = 0 # TODO: define the giou loss in 4D space(two trajectories)
         # 1.2 calculate the classification loss(only consider the attribute HAS_OBJECT)
         cls_cost = compute_cls_cost_matrix(pred_trajs, gt_trajs) # (B, N, M)
-
+        
         # type_classification_loss_matrix = F.binary_cross_entropy(pred_trajs[:, :, TrajParamIndex.TYPE], gt_trajs[:, :, TrajParamIndex.TYPE])
         # 1.4 calculate the composite loss
         # composite_loss_matrix = center_dist_matrix # + velocity_diff_matrix + dimension_diff_matrix + giou_loss_matrix + type_classification_loss_matrix + uncertainty_loss_matrix
