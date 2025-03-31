@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from xinnovation.src.core.registry import NECKS
+from typing import List
 
 @NECKS.register_module()
 class FPN(nn.Module):
@@ -15,10 +16,10 @@ class FPN(nn.Module):
     
     def __init__(
         self,
-        in_channels: list,
+        in_channels: List[int],
         out_channels: int = 256,
-        extra_blocks: int = 2,
-        relu_before_extra_convs: bool = True
+        extra_blocks: int = 0,
+        relu_before_extra_convs: bool = False
     ):
         super().__init__()
         self.in_channels = in_channels
@@ -53,10 +54,10 @@ class FPN(nn.Module):
         """Forward pass.
         
         Args:
-            inputs (list): List of input feature maps
+            inputs (list): List[torch.Tensor] features from different stages, from high to low resolution
             
         Returns:
-            list: List of output feature maps
+            list: List[torch.Tensor]
         """
         assert len(inputs) == len(self.in_channels)
         
@@ -69,9 +70,9 @@ class FPN(nn.Module):
         # Build top-down path
         used_backbone_levels = len(laterals)
         for i in range(used_backbone_levels - 1, 0, -1):
-            prev_shape = laterals[i - 1].shape[-2:]
+            prev_shape = laterals[i - 1].shape[-2:] # (H, W)
             laterals[i - 1] += nn.functional.interpolate(
-                laterals[i], size=prev_shape, mode='nearest'
+                laterals[i], size=prev_shape, mode='bilinear'
             )
             
         # Smooth lateral connections

@@ -16,6 +16,23 @@
 
 from xinnovation.src.core import (SourceCameraId, CameraType, CameraParamIndex, EgoStateIndex, TrajParamIndex)
 
+def repvgg_backbone(name: str="a1", scales_to_drop: List[int]=[2, 4], use_pretrained: bool=True):
+    return dict(
+        type="ImageFeatureExtractor",
+        backbone=f'repvgg_{name}',
+        scales_to_drop=scales_to_drop,
+        use_pretrained=use_pretrained
+    )
+
+def fpn_neck(in_channels: List[int]=[256, 512, 1024]):
+    return dict(
+        type="FPN",
+        in_channels=in_channels,
+        out_channels=256,
+        extra_blocks=0,
+        relu_before_extra_convs=False
+    )
+    
 lightning_module = dict(
     type="Sparse4DModule",
     scheduler=dict(
@@ -44,32 +61,23 @@ lightning_module = dict(
             dict(
                 type="FPNImageFeatureExtractor",
                 name="front_stereo_camera",
-                camera_group=[SourceCameraId.FRONT_LEFT_CAMERA, SourceCameraId.FRONT_RIGHT_CAMERA],
-                backbone="repvgg_a1",
-                output_chanels=256,
-                fpn_channels=[256, 512, 1024],
-                fpn_downsample_scales=[4, 8, 16],
-                use_pretrained=True
+                # camera_group=[SourceCameraId.FRONT_LEFT_CAMERA, SourceCameraId.FRONT_RIGHT_CAMERA],
+                backbone=repvgg_backbone(name="a2", scales_to_drop=[2, 4], use_pretrained=True),
+                neck=fpn_neck()
             ),
             dict(
                 type="FPNImageFeatureExtractor",
                 name="short_focal_length_camera",
-                camera_group=[SourceCameraId.FRONT_CENTER_CAMERA, SourceCameraId.SIDE_LEFT_CAMERA, SourceCameraId.SIDE_RIGHT_CAMERA],
-                backbone="repvgg_a1",
-                output_chanels=256,
-                fpn_channels=[1024],
-                fpn_downsample_scales=[16],
-                use_pretrained=True
+                # camera_group=[SourceCameraId.FRONT_CENTER_CAMERA, SourceCameraId.SIDE_LEFT_CAMERA, SourceCameraId.SIDE_RIGHT_CAMERA],
+                backbone=repvgg_backbone(name="a1", scales_to_drop=[2, 4], use_pretrained=True),
+                neck=fpn_neck()
             ),
             dict(
                 type="FPNImageFeatureExtractor",
                 name="rear_camera",
-                camera_group=[SourceCameraId.REAR_LEFT_CAMERA, SourceCameraId.REAR_RIGHT_CAMERA],
-                backbone="repvgg_a1",
-                output_chanels=256,
-                fpn_channels=[256, 512, 1024],
-                fpn_downsample_scales=[4, 8, 16],
-                use_pretrained=True
+                # camera_group=[SourceCameraId.REAR_LEFT_CAMERA, SourceCameraId.REAR_RIGHT_CAMERA],
+                backbone=repvgg_backbone(name="a1", scales_to_drop=[2, 4], use_pretrained=True),
+                neck=fpn_neck()
             )
         ),
         # mts(multiview_temporal_spatial) feature sampler and aggregator
