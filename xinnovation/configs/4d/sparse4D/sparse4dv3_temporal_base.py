@@ -14,6 +14,8 @@
 # │   │   ├── NORM_LAYERS        # 归一化层 (BatchNorm, LayerNorm, GroupNorm)
 # │   │   └── POS_ENCODING       # 位置编码 (SineEncoding, LearnedEncoding)
 
+from xinnovation.src.core import (SourceCameraId, CameraType, CameraParamIndex, EgoStateIndex, TrajParamIndex)
+
 lightning_module = dict(
     type="Sparse4DModule",
     scheduler=dict(
@@ -32,23 +34,55 @@ lightning_module = dict(
     ),
     detector=dict(
         type="Sparse4DDetector",
-        backbone=dict(
-            type="ResNet",
-            depth=50
+        anchor_generator=dict(
+            type="Anchor3DGenerator",
+            scales=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
+            aspect_ratios=[0.5, 1.0, 2.0],
+            strides=[4, 8, 16, 32, 64]
         ),
-        neck=dict(
-            type="FPN",
-            in_channels=[256, 512, 1024, 2048],
-            out_channels=256,
-            start_level=1,
-            add_extra_convs="on_output"
+        feature_extractors=list(
+            dict(
+                type="FPNImageFeatureExtractor",
+                name="front_stereo_camera",
+                camera_group=[SourceCameraId.FRONT_LEFT_CAMERA, SourceCameraId.FRONT_RIGHT_CAMERA],
+                backbone="repvgg_a1",
+                output_chanels=256,
+                fpn_channels=[256, 512, 1024],
+                fpn_downsample_scales=[4, 8, 16],
+                use_pretrained=True
+            ),
+            dict(
+                type="FPNImageFeatureExtractor",
+                name="short_focal_length_camera",
+                camera_group=[SourceCameraId.FRONT_CENTER_CAMERA, SourceCameraId.SIDE_LEFT_CAMERA, SourceCameraId.SIDE_RIGHT_CAMERA],
+                backbone="repvgg_a1",
+                output_chanels=256,
+                fpn_channels=[1024],
+                fpn_downsample_scales=[16],
+                use_pretrained=True
+            ),
+            dict(
+                type="FPNImageFeatureExtractor",
+                name="rear_camera",
+                camera_group=[SourceCameraId.REAR_LEFT_CAMERA, SourceCameraId.REAR_RIGHT_CAMERA],
+                backbone="repvgg_a1",
+                output_chanels=256,
+                fpn_channels=[256, 512, 1024],
+                fpn_downsample_scales=[4, 8, 16],
+                use_pretrained=True
+            )
         ),
-        head=dict(
-            type="Sparse4DHead",
-            in_channels=256,
-            out_channels=256,
-            num_classes=10
-        )
+        # mts(multiview_temporal_spatial) feature sampler and aggregator
+        mts_feature_sampler=dict(
+            type="MultiviewTemporalSpatialFeatureSampler",
+            feature_extractors=["front_stereo_camera", "short_focal_length_camera", "rear_camera"],
+            temporal_fusion_strategy="average"
+        ),
+        mts_feature_aggregator=dict(
+            type="MultiviewTemporalSpatialFeatureAggregator",
+            feature_extractors=["front_stereo_camera", "short_focal_length_camera", "rear_camera"],
+            temporal_fusion_strategy="average"
+        ),
     )
 )
 # ============================== 3. Data Config ==============================
