@@ -53,9 +53,19 @@ lightning_module = dict(
         type="Sparse4DDetector",
         anchor_generator=dict(
             type="Anchor3DGenerator",
-            scales=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
-            aspect_ratios=[0.5, 1.0, 2.0],
-            strides=[4, 8, 16, 32, 64]
+            front_type="div_x",
+            back_type="div_x",
+            front_params=dict(alpha=0.4, beta=10.0, order=2.0),
+            back_params=dict(alpha=0.35, beta=10.0, order=2.0),
+            front_min_spacing=2.0,
+            front_max_distance=200.0,
+            back_min_spacing=2.0,
+            back_max_distance=100.0,
+            left_y_max=3.75 * 2,
+            right_y_max=3.75 * 2,
+            y_interval=3.75,
+            z_value=0.2,
+            anchor_size=(5.0, 2.0, 1.5) # (length, width, height)
         ),
         feature_extractors=list(
             dict(

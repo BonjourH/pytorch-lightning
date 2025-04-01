@@ -2,9 +2,9 @@ import torch
 import torch.nn as nn
 from typing import Dict, Optional
 
-from xinnovation.src.core.registry import POS_ENCODING
+from xinnovation.src.core.registry import POS_ENCODINGS
 
-@POS_ENCODING.register_module()
+@POS_ENCODINGS.register_module()
 class SinePositionalEncoding(nn.Module):
     """Sine Positional Encoding.
     

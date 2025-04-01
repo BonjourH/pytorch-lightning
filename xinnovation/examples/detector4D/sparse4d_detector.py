@@ -3,7 +3,7 @@ import torch.nn as nn
 from typing import Dict, Optional, Union, Any, List
 from xinnovation.src.core.registry import DETECTORS
 from easydict import EasyDict as edict
-from .anchor_generator import Anchor3DGenerator
+from ...src.components.lightning_module.detectors.plugins.anchor_generator import Anchor3DGenerator
 from xinnovation.src.components.lightning_module.detectors import FPNImageFeatureExtractor
 from .mts_feature_sampler import MultiviewTemporalSpatialFeatureSampler
 from .mts_feature_aggregator import MultiviewTemporalSpatialFeatureAggregator

@@ -206,7 +206,9 @@ NECKS = IMAGE_FEATURE_EXTRACTOR.create_child("neck")          # 特征融合 (FP
 HEADS = DETECTORS.create_child("head")          # 任务头 (DetectionHead, ClassificationHead)
 ATTENTIONS = DETECTORS.create_child("attention")     # 注意力机制 (SelfAttention, CBAM, TransformerBlock)
 NORM_LAYERS = DETECTORS.create_child("norm_layer")  # 归一化层 (BatchNorm, LayerNorm, GroupNorm)
-POS_ENCODINGS = DETECTORS.create_child("pos_encoding")  # 位置编码 (SineEncoding, LearnedEncoding)
+PLUGINS = DETECTORS.create_child("plugin")  # 插件
+ANCHOR_GENERATOR = PLUGINS.create_child("anchor_generator")  # 锚框生成器 (AnchorGenerator, Anchor3DGenerator)
+POS_ENCODINGS = PLUGINS.create_child("positional_encoding")  # 位置编码 (SineEncoding, LearnedEncoding)
 
 # ==========================================
 #                数据体系 (LightningDataModule)
