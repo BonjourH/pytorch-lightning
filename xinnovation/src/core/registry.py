@@ -153,10 +153,12 @@ class Registry:
 # │   │   ├── IMAGE_FEATURE_EXTRACTOR # 图像特征提取器 (ResNet, SwinTransformer, PointNet++)
 # │   │   │   ├── BACKBONES          # 骨干网络 (ResNet, SwinTransformer, PointNet++)
 # │   │   │   ├── NECKS              # 特征融合 (FPN, BiFPN, ASFF)
-# │   │   │── HEADS              # 任务头 (DetectionHead, ClassificationHead)
-# │   │   ├── ATTENTION          # 注意力机制 (SelfAttention, CBAM, TransformerBlock)
-# │   │   ├── NORM_LAYERS        # 归一化层 (BatchNorm, LayerNorm, GroupNorm)
-# │   │   └── POS_ENCODING       # 位置编码 (SineEncoding, LearnedEncoding)
+# │   │   ├── HEADS              # 任务头 (DetectionHead, ClassificationHead)
+# │   │   ├── PLUGINS              # 插件 (AnchorGenerator, Anchor3DGenerator, SineEncoding, LearnedEncoding)
+# │   │   │   ├── ANCHOR_GENERATOR  # 锚框生成器 (AnchorGenerator, Anchor3DGenerator)
+# │   │   │   ├── POS_ENCODING       # 位置编码 (SineEncoding, LearnedEncoding)
+# │   │   │   ├── ATTENTION          # 注意力机制 (SelfAttention, CBAM, TransformerBlock)
+# │   │   │   ├── NORM_LAYERS        # 归一化层 (BatchNorm, LayerNorm, GroupNorm)
 # ├── DATA
 # │   ├── DATASETS           # 数据集 (ImageNet, COCO, KITTI, nuScenes)
 # │   ├── TRANSFORMS         # 数据增强 (RandomFlip, Normalize, ColorJitter)
@@ -203,12 +205,14 @@ DETECTORS = LIGHTNING_MODULE.create_child("detector")  # 检测器 (YOLO, SSD, F
 IMAGE_FEATURE_EXTRACTOR = DETECTORS.create_child("image_feature_extractor")
 BACKBONES = IMAGE_FEATURE_EXTRACTOR.create_child("backbone")  # 骨干网络 (ResNet, SwinTransformer, PointNet++)
 NECKS = IMAGE_FEATURE_EXTRACTOR.create_child("neck")          # 特征融合 (FPN, BiFPN, ASFF)
+
 HEADS = DETECTORS.create_child("head")          # 任务头 (DetectionHead, ClassificationHead)
-ATTENTIONS = DETECTORS.create_child("attention")     # 注意力机制 (SelfAttention, CBAM, TransformerBlock)
-NORM_LAYERS = DETECTORS.create_child("norm_layer")  # 归一化层 (BatchNorm, LayerNorm, GroupNorm)
+
 PLUGINS = DETECTORS.create_child("plugin")  # 插件
 ANCHOR_GENERATOR = PLUGINS.create_child("anchor_generator")  # 锚框生成器 (AnchorGenerator, Anchor3DGenerator)
-POS_ENCODINGS = PLUGINS.create_child("positional_encoding")  # 位置编码 (SineEncoding, LearnedEncoding)
+POS_ENCODING = PLUGINS.create_child("positional_encoding")  # 位置编码 (SineEncoding, LearnedEncoding)
+NORM_LAYERS = PLUGINS.create_child("norm_layer")  # 归一化层 (BatchNorm, LayerNorm, GroupNorm)
+ATTENTION = PLUGINS.create_child("attention")  # 注意力机制 (SelfAttention, CBAM, TransformerBlock)
 
 # ==========================================
 #                数据体系 (LightningDataModule)

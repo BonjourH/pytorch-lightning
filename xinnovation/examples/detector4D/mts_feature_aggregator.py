@@ -1,11 +1,11 @@
 import torch
 import torch.nn as nn
 from typing import Dict, List, Tuple, Optional
-from xinnovation.src.core.registry import COMPONENTS
+from xinnovation.src.core.registry import PLUGINS
 
 __all__ = ["MultiviewTemporalSpatialFeatureAggregator"]
 
-@COMPONENTS.register_module()
+@PLUGINS.register_module()
 class MultiviewTemporalSpatialFeatureAggregator(nn.Module):
     """Aggregate features from multiple views and temporal frames.
     

@@ -1,10 +1,8 @@
 import torch
 import torch.nn as nn
 from typing import Dict, Optional, Union, Any, List
-from xinnovation.src.core.registry import DETECTORS
-from easydict import EasyDict as edict
-from ...src.components.lightning_module.detectors.plugins.anchor_generator import Anchor3DGenerator
-from xinnovation.src.components.lightning_module.detectors import FPNImageFeatureExtractor
+from xinnovation.src.core.registry import DETECTORS, ANCHOR_GENERATOR, IMAGE_FEATURE_EXTRACTOR
+from xinnovation.src.components.lightning_module.detectors import FPNImageFeatureExtractor, Anchor3DGenerator
 from .mts_feature_sampler import MultiviewTemporalSpatialFeatureSampler
 from .mts_feature_aggregator import MultiviewTemporalSpatialFeatureAggregator
 
@@ -14,20 +12,20 @@ __all__ = ["Sparse4DDetector"]
 class Sparse4DDetector(nn.Module):
     def __init__(self, anchor_generator: Dict, 
                     feature_extractors: Dict, 
-                    mts_feature_sampler: Dict,
-                    mts_feature_aggregator: Dict,
+                    mts_feature_sampler: Dict=None,
+                    mts_feature_aggregator: Dict=None,
                     **kwargs):
         super().__init__()
-        self.anchor_generator = Anchor3DGenerator.build(anchor_generator)
+        self.anchor_generator = ANCHOR_GENERATOR.build(anchor_generator)
 
         # Create feature extractors for each camera group
         self.feature_extractors = nn.ModuleDict({
-            cfg.name: FPNImageFeatureExtractor.build(cfg)
-            for cfg in feature_extractors
+            name: IMAGE_FEATURE_EXTRACTOR.build(cfg)
+            for name, cfg in feature_extractors.items()
         })
 
-        self.mts_feature_sampler = MultiviewTemporalSpatialFeatureSampler.build(mts_feature_sampler)
-        self.mts_feature_aggregator = MultiviewTemporalSpatialFeatureAggregator.build(mts_feature_aggregator)
+        # self.mts_feature_sampler = MultiviewTemporalSpatialFeatureSampler.build(mts_feature_sampler)
+        # self.mts_feature_aggregator = MultiviewTemporalSpatialFeatureAggregator.build(mts_feature_aggregator)
         
     
     def _extract_features(self, name: str, imgs: torch.Tensor) -> List[torch.Tensor]:

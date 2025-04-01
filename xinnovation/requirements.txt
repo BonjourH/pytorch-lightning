@@ -15,6 +15,7 @@ easydict
 timm
 GPUtil
 pytest
+pytest-xdist
 pandas
 torchinfo
 torchviz

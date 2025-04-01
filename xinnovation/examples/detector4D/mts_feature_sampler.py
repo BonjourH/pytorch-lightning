@@ -1,12 +1,12 @@
 import torch
 import torch.nn as nn
 from typing import Dict, List, Tuple, Optional
-from xinnovation.src.core.registry import COMPONENTS
+from xinnovation.src.core.registry import PLUGINS
 from xinnovation.src.core import SourceCameraId
 
 __all__ = ["MultiviewTemporalSpatialFeatureSampler"]
 
-@COMPONENTS.register_module()
+@PLUGINS.register_module()
 class MultiviewTemporalSpatialFeatureSampler(nn.Module):
     """Sample features from multiple views and temporal frames.
     

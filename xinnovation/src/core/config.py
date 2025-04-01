@@ -109,7 +109,18 @@ class Config:
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         
-        return {k: v for k, v in module.__dict__.items() if not k.startswith('__')}
+        # Filter out types from typing module, built-in symbols, and unsupported types
+        result = {}
+        for k, v in module.__dict__.items():
+            # Skip built-ins, private attrs, imports from typing, and callable objects
+            if (k.startswith('__') or 
+                k in ('List', 'Dict', 'Optional', 'Union', 'Any') or
+                callable(v) or
+                getattr(v, '__module__', '').startswith('typing')):
+                continue
+            result[k] = v
+            
+        return result
 
     def __getitem__(self, key: str) -> Any:
         """像字典一样通过 [] 获取值"""

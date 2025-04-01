@@ -1,0 +1,95 @@
+lightning_module:
+  type: Sparse4DModule
+  scheduler:
+    type: StepLRScheduler
+    step_size: 10
+    gamma: 0.1
+  optimizer:
+    type: AdamWOptimizer
+    lr: 0.001
+    weight_decay: 0.0001
+  loss:
+    type: Sparse4DLossWithDAC
+    layer_loss_weights:
+    - 0.5
+    - 0.5
+    - 0.5
+    - 0.5
+    - 0.5
+    - 0.5
+    - 0.5
+  detector:
+    type: Sparse4DDetector
+    anchor_generator:
+      type: Anchor3DGenerator
+      front_type: div_x
+      back_type: div_x
+      front_params:
+        alpha: 0.4
+        beta: 10.0
+        order: 2.0
+      back_params:
+        alpha: 0.35
+        beta: 10.0
+        order: 2.0
+      front_min_spacing: 2.0
+      front_max_distance: 200.0
+      back_min_spacing: 2.0
+      back_max_distance: 100.0
+      left_y_max: 7.5
+      right_y_max: 7.5
+      y_interval: 3.75
+      z_value: 0.2
+      anchor_size: !!python/tuple
+      - 5.0
+      - 2.0
+      - 1.5
+    feature_extractors:
+      front_stereo_camera:
+        type: FPNImageFeatureExtractor
+        backbone:
+          type: ImageFeatureExtractor
+          backbone: repvgg_a2
+          scales_to_drop:
+          - 2
+          - 4
+          use_pretrained: true
+        neck:
+          type: FPN
+          in_channels: &id001
+          - 256
+          - 512
+          - 1024
+          out_channels: 256
+          extra_blocks: 0
+          relu_before_extra_convs: false
+      short_focal_length_camera:
+        type: FPNImageFeatureExtractor
+        backbone:
+          type: ImageFeatureExtractor
+          backbone: repvgg_a1
+          scales_to_drop:
+          - 2
+          - 4
+          use_pretrained: true
+        neck:
+          type: FPN
+          in_channels: *id001
+          out_channels: 256
+          extra_blocks: 0
+          relu_before_extra_convs: false
+      rear_camera:
+        type: FPNImageFeatureExtractor
+        backbone:
+          type: ImageFeatureExtractor
+          backbone: repvgg_a1
+          scales_to_drop:
+          - 2
+          - 4
+          use_pretrained: true
+        neck:
+          type: FPN
+          in_channels: *id001
+          out_channels: 256
+          extra_blocks: 0
+          relu_before_extra_convs: false
