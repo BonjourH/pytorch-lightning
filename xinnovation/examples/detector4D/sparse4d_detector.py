@@ -1,21 +1,21 @@
 import torch
 import torch.nn as nn
 from typing import Dict, Optional, Union, Any, List
-from xinnovation.src.core.registry import DETECTORS, ANCHOR_GENERATOR, IMAGE_FEATURE_EXTRACTOR
+from xinnovation.src.core import SourceCameraId, DETECTORS, ANCHOR_GENERATOR, IMAGE_FEATURE_EXTRACTOR, PLUGINS
 from xinnovation.src.components.lightning_module.detectors import FPNImageFeatureExtractor, Anchor3DGenerator
-from .mts_feature_sampler import MultiviewTemporalSpatialFeatureSampler
 from .mts_feature_aggregator import MultiviewTemporalSpatialFeatureAggregator
 
 __all__ = ["Sparse4DDetector"]
 
 @DETECTORS.register_module()
 class Sparse4DDetector(nn.Module):
-    def __init__(self, anchor_generator: Dict, 
+    def __init__(self, anchor_generator: Dict,
+                    camera_groups: Dict[str, List[SourceCameraId]],
                     feature_extractors: Dict, 
-                    mts_feature_sampler: Dict=None,
-                    mts_feature_aggregator: Dict=None,
+                    mts_feature_aggregator: Dict,
                     **kwargs):
         super().__init__()
+        self.camera_groups = camera_groups
         self.anchor_generator = ANCHOR_GENERATOR.build(anchor_generator)
 
         # Create feature extractors for each camera group
@@ -23,12 +23,11 @@ class Sparse4DDetector(nn.Module):
             name: IMAGE_FEATURE_EXTRACTOR.build(cfg)
             for name, cfg in feature_extractors.items()
         })
-
-        # self.mts_feature_sampler = MultiviewTemporalSpatialFeatureSampler.build(mts_feature_sampler)
-        # self.mts_feature_aggregator = MultiviewTemporalSpatialFeatureAggregator.build(mts_feature_aggregator)
+        
+        self.mts_feature_aggregator = PLUGINS.build(mts_feature_aggregator)
         
     
-    def _extract_features(self, name: str, imgs: torch.Tensor) -> List[torch.Tensor]:
+    def _extract_features(self, group_name: str, imgs: torch.Tensor) -> List[torch.Tensor]:
         """
         Extract features from images using the specified feature extractor.
         
@@ -41,10 +40,9 @@ class Sparse4DDetector(nn.Module):
         """
         B, T, N_cams, C, H, W = imgs.shape
         imgs = imgs.view(B * T * N_cams, C, H, W)
-        feats = self.feature_extractors[name](imgs)
-        output_channel = self.feature_extractors[name].out_channel
-        down_scales = self.feature_extractors[name].fpn_downsample_scales   
-        feats = [feat.view(B, T, N_cams, output_channel, H // down_scale, W // down_scale) for feat, down_scale in zip(feats, down_scales)]
+        extractor = self.feature_extractors[group_name]
+        feats = extractor(imgs)
+        feats = [feat.view(B, T, N_cams, extractor.out_channel, H // ds, W // ds) for feat, ds in zip(feats, extractor.fpn_downsample_scales)]
         return feats
     
     def forward(self, batch: Dict) -> List[Dict[str, torch.Tensor]]:
@@ -55,26 +53,28 @@ class Sparse4DDetector(nn.Module):
                 - images: Dict[str -> Tensor[B, T, N_cams, C, H, W]], group_name -> img tensor
                 - calibrations: Dict[camera_id -> Tensor[B, CameraParamIndex.END_OF_INDEX]]
                 - ego_states: Tensor[B, T, EgoStateIndex.END_OF_INDEX]
+                - camera_ids: List[SourceCameraId], camera ids
             
         Returns:
             List[Dict[str, torch.Tensor]], decoder outputs at each layer
         """
         
-        # Extract features from each camera with gradient checkpointing
-        all_features_dict = {}
-        for name, imgs in batch['images'].items():
+        # Extract features from each camera
+        all_features_dict: Dict[SourceCameraId, List[torch.Tensor]] = {}  
+        for group_name, imgs in batch['images'].items():
+            B, T, N_cams = imgs.shape[:3]
             if self.use_checkpoint:
-                feats = torch.utils.checkpoint.checkpoint(self._extract_features, name, imgs, use_reentrant=False)
+                feats = torch.utils.checkpoint.checkpoint(self._extract_features, group_name, imgs, use_reentrant=False)
             else:
-                feats = self._extract_features(name, imgs)
+                feats = self._extract_features(group_name, imgs) 
+                # feats: List[Tensor[B*T*N_cams, C, H // down_scale_i, W // down_scale_i]]
+            for i in range(len(feats)):
+                C_i, H_i, W_i = feats[i].shape[2:]
+                feats[i] = feats[i].view(B * T, N_cams, C_i, H_i, W_i)
+            for idx, camera_id in enumerate(self.camera_groups[group_name]):
+                all_features_dict[camera_id] = [feat[:, :, idx] for feat in feats] # (B * T, C, H // down_scale_i, W // down_scale_i)
                 
-            for idx, camera_id in enumerate(self.feature_extractors[name].camera_ids):
-                all_features_dict[camera_id] = feats[:, :, idx]
-        
-        # Fuse temporal features for each camera
-        # fused_features_dict = {}
-        # for camera_id, features in all_features_dict.items():
-        #     fused_features_dict[camera_id] = self.temporal_fusion(features)
+        # Decoder part
         
         # Decode trajectories
         fused_features_dict = {}

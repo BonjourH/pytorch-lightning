@@ -55,6 +55,11 @@ lightning_module = dict(
     ),
     detector=dict(
         type="Sparse4DDetector",
+        camera_groups=dict(
+            front_stereo_camera=[SourceCameraId.FRONT_LEFT_CAMERA, SourceCameraId.FRONT_RIGHT_CAMERA],
+            short_focal_length_camera=[SourceCameraId.FRONT_CENTER_CAMERA],
+            rear_camera=[SourceCameraId.REAR_LEFT_CAMERA, SourceCameraId.REAR_RIGHT_CAMERA]
+        ),
         anchor_generator=dict(
             type="Anchor3DGenerator",
             front_type="div_x",
@@ -72,32 +77,33 @@ lightning_module = dict(
             anchor_size=(5.0, 2.0, 1.5) # (length, width, height)
         ),
         feature_extractors=dict(
+            # Ensure all the feature extractors have the same FPN levels
             front_stereo_camera=dict(
                 type="FPNImageFeatureExtractor",
-                # camera_group=[SourceCameraId.FRONT_LEFT_CAMERA, SourceCameraId.FRONT_RIGHT_CAMERA],
                 backbone=repvgg_backbone(name="a2", scales_to_drop=[2, 4], use_pretrained=True),
                 neck=fpn_neck()
             ),
             short_focal_length_camera=dict(
                 type="FPNImageFeatureExtractor",
-                # camera_group=[SourceCameraId.FRONT_CENTER_CAMERA, SourceCameraId.SIDE_LEFT_CAMERA, SourceCameraId.SIDE_RIGHT_CAMERA],
                 backbone=repvgg_backbone(name="a1", scales_to_drop=[2, 4], use_pretrained=True),
                 neck=fpn_neck()
             ),
             rear_camera=dict(
                 type="FPNImageFeatureExtractor",
-                # camera_group=[SourceCameraId.REAR_LEFT_CAMERA, SourceCameraId.REAR_RIGHT_CAMERA],
                 backbone=repvgg_backbone(name="a1", scales_to_drop=[2, 4], use_pretrained=True),
                 neck=fpn_neck()
             )
         ),
-        # mts(multiview_temporal_spatial) feature sampler and aggregator
-        # mts_feature_sampler=dict(
-        #     type="MultiviewTemporalSpatialFeatureSampler",
-        # ),
-        # mts_feature_aggregator=dict(
-        #     type="MultiviewTemporalSpatialFeatureAggregator",
-        # ),
+        mts_feature_aggregator=dict(
+            type="MultiviewTemporalSpatialFeatureAggregator",
+            query_dim=256,
+            num_learnable_points=8,
+            learnable_points_range=3.0,
+            sequence_length=10,
+            temporal_weight_decay=0.5,
+            camera_nb=7,
+            fpn_levels=3,
+        ),
     )
 )
 # ============================== 3. Data Config ==============================
