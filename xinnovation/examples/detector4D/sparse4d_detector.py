@@ -17,13 +17,14 @@ class Sparse4DDetector(nn.Module):
                     mts_feature_aggregator: Dict,
                     self_attention: Dict,
                     ffn: Dict,
-                    norm: Dict,
                     refine: Dict,
                     temp_attention: Dict,
+                    use_checkpoint: bool = False,
                     **kwargs):
         super().__init__()
         self.camera_groups = camera_groups
         self.decoder_op_orders = decoder_op_orders
+        self.use_checkpoint = use_checkpoint
         
         self.anchor_encoder = PLUGINS.build(anchor_encoder)
         self.register_buffer("init_trajs", self.anchor_encoder.get_init_trajs(speed=23.0))
@@ -41,7 +42,6 @@ class Sparse4DDetector(nn.Module):
             "temp_attention": [temp_attention, ATTENTION],
             "self_attention": [self_attention, ATTENTION],
             "ffn": [ffn, FEEDFORWARD_NETWORK],
-            "norm": [norm, NORM_LAYERS],
             "refine": [refine, PLUGINS]
         }
 
@@ -49,7 +49,8 @@ class Sparse4DDetector(nn.Module):
         for idx, layer_ops in enumerate(decoder_op_orders):
             layer = nn.ModuleList()
             if idx == 0:
-                layer_ops = layer_ops[3:] # start from mts_feature_aggregator
+                mts_idx = layer_ops.index("mts_feature_aggregator")
+                layer_ops = layer_ops[mts_idx:] # start from mts_feature_aggregator
             for op in layer_ops:
                 if op == "mts_feature_aggregator":
                     layer.append(self.mts_feature_aggregator)
@@ -138,13 +139,11 @@ class Sparse4DDetector(nn.Module):
                     tgts = layer(tgts, pos_embeds)
                 elif op == "ffn":
                     tgts = layer(tgts)
-                elif op == "norm":
-                    tgts = layer(tgts)
                 elif op == "refine":
                     trajs, quality = layer(tgts, pos_embeds, trajs)
                     trajs_prediction.append(trajs)
                     quality_prediction.append(quality)
-            # order: temp_attn => self_attn => mts_feature_aggregator => ffn => norm => refine
+            # order: temp_attn => self_attn => mts_feature_aggregator => ffn => refine
                     
         # Clear intermediate tensors to save memory
         del all_features_dict

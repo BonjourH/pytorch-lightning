@@ -1,8 +1,8 @@
 import torch
 import torch.nn as nn
-from xinnovation.src.core.registry import ATTENTION
-from typing import Optional
-
+from xinnovation.src.core.registry import ATTENTION, NORM_LAYERS
+from typing import Optional, Dict
+from xinnovation.src.core import build_from_cfg
 __all__ = ["DecoupledMultiHeadAttention"]
 
 
@@ -11,11 +11,12 @@ class DecoupledMultiHeadAttention(nn.Module):
     """
     Decoupled multi-head attention.
     """
-    def __init__(self, query_dim: int = 256, num_heads: int = 8, dropout: float = 0.1):
+    def __init__(self, query_dim: int = 256, num_heads: int = 8, dropout: float = 0.1, post_norm: Dict = None):
         super().__init__()
         self.value_linear = nn.Linear(query_dim, query_dim * 2, bias=False)
         self.query_linear = nn.Linear(query_dim * 2, query_dim, bias=False)
         self.attn = nn.MultiheadAttention(query_dim, num_heads, batch_first=True, dropout=dropout)
+        self.post_norm = build_from_cfg(post_norm, NORM_LAYERS)
 
     def forward(self, tgt: torch.Tensor, 
                 pos_tgt: torch.Tensor, 
@@ -41,5 +42,7 @@ class DecoupledMultiHeadAttention(nn.Module):
 
         tgt = self.attn(tgt, memory, v)[0] # [B, N, 2 * query_dim]
         tgt = self.query_linear(tgt) # [B, N, query_dim]
+        if self.post_norm is not None:
+            tgt = self.post_norm(tgt)
         return tgt
 

@@ -114,10 +114,8 @@ lightning_module = dict(
         decoder_op_orders=[[
                 "temp_attention",
                 "self_attention",
-                "norm",
                 "mts_feature_aggregator",
                 "ffn",
-                "norm",
                 "refine",
             ]
             for _ in range(num_decoder)
@@ -137,11 +135,13 @@ lightning_module = dict(
             type="DecoupledMultiHeadAttention",
             query_dim=query_dim,
             num_heads=num_groups,
-            dropout=dropout
+            dropout=dropout,
+            post_norm=dict(type="LayerNorm", eps=1e-6, normalized_shape=query_dim),
         ),
         ffn=dict(
             type="AsymmetricFFN",
-            pre_norm=dict(type="LayerNorm", eps=1e-6, normalized_shape=query_dim),
+            pre_norm=dict(type="LayerNorm", eps=1e-6, normalized_shape=query_dim * 2),
+            post_norm=dict(type="LayerNorm", eps=1e-6, normalized_shape=query_dim),
             in_channels=query_dim * 2,
             embed_dims=query_dim,
             feedforward_channels=query_dim * 4,
@@ -149,11 +149,6 @@ lightning_module = dict(
             act_cfg=dict(type="ReLU", inplace=True),
             ffn_drop=0.1,
             add_identity=True
-        ),
-        norm=dict(
-            type="LayerNorm",
-            normalized_shape=query_dim,
-            eps=1e-6
         ),
         refine=dict(
             type="TrajectoryRefiner",
@@ -165,7 +160,8 @@ lightning_module = dict(
             type="DecoupledMultiHeadAttention",
             query_dim=query_dim,
             num_heads=num_groups,
-            dropout=dropout
+            dropout=dropout,
+            post_norm=None
         ) if use_temp_attention else None
     )
 )

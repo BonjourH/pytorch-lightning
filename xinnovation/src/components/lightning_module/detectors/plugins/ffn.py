@@ -1,4 +1,4 @@
-from xinnovation.src.core import FEEDFORWARD_NETWORK, ACTIVATION, DROPOUT, NORM_LAYERS
+from xinnovation.src.core import FEEDFORWARD_NETWORK, ACTIVATION, DROPOUT, NORM_LAYERS, build_from_cfg
 import torch
 import torch.nn as nn
 from torch.nn import Sequential, Linear
@@ -12,6 +12,7 @@ class AsymmetricFFN(nn.Module):
         self,
         in_channels=None,
         pre_norm=None,
+        post_norm=None,
         embed_dims=256,
         feedforward_channels=1024,
         num_fcs=2,
@@ -46,19 +47,17 @@ class AsymmetricFFN(nn.Module):
         assert num_fcs >= 2, (
             "num_fcs should be no less " f"than 2. got {num_fcs}."
         )
-        self.in_channels = in_channels
-        self.pre_norm = pre_norm
+        self.pre_norm = build_from_cfg(pre_norm, NORM_LAYERS)
+        self.post_norm = build_from_cfg(post_norm, NORM_LAYERS)
+        
+        self.in_channels = in_channels if in_channels is not None else embed_dims
         self.embed_dims = embed_dims
         self.feedforward_channels = feedforward_channels
         self.num_fcs = num_fcs
         self.activate = ACTIVATION.build(act_cfg)
-
+            
         layers = []
-        if in_channels is None:
-            in_channels = embed_dims
-        if pre_norm is not None:
-            self.pre_norm = NORM_LAYERS.build(pre_norm)
-
+        
         for _ in range(num_fcs - 1):
             layers.append(
                 Sequential(
@@ -89,7 +88,8 @@ class AsymmetricFFN(nn.Module):
             x = self.pre_norm(x)
         out = self.layers(x) # inchannels -> feedforward_channels -> embed_dims
         out = self.dropout_layer(out)
-        if not self.add_identity:
-            return out
-        identity = self.identity_fc(x) # inchannels -> embed_dims
-        return identity + out
+        if self.add_identity:
+            out = self.identity_fc(x) + out
+        if self.post_norm is not None:
+            out = self.post_norm(out)
+        return out
