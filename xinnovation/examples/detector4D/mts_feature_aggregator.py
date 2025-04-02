@@ -3,13 +3,13 @@ import torch.nn as nn
 from torch.nn import functional as F
 from typing import List, Tuple, Optional, Dict
 from xinnovation.src.core import SourceCameraId, TrajParamIndex, CameraParamIndex, EgoStateIndex
-from xinnovation.src.core.registry import PLUGINS
+from xinnovation.src.core.registry import ATTENTION
 from xinnovation.src.utils import generate_bbox_corners_points, project_points_to_image
 from xinnovation.src.utils.feature_sampling import grid_sample_fpn_features_parallel_apply
 
 __all__ = ["MultiviewTemporalSpatialFeatureAggregator"]
 
-@PLUGINS.register_module()
+@ATTENTION.register_module()
 class MultiviewTemporalSpatialFeatureAggregator(nn.Module):
     """Sample features from multiple views and temporal frames.
     
@@ -25,6 +25,7 @@ class MultiviewTemporalSpatialFeatureAggregator(nn.Module):
                  temporal_weight_decay: float = 0.5,
                  camera_nb: int = 7,
                  fpn_levels: int = 3,
+                 residual_mode: str = "cat",
                  **kwargs):
         """Initialize the feature sampler.
         
@@ -37,6 +38,7 @@ class MultiviewTemporalSpatialFeatureAggregator(nn.Module):
         self.num_learnable_points = num_learnable_points
         self.query_dim = query_dim
         self.learnable_points_range = learnable_points_range
+        self.residual_mode = residual_mode
         
         # Keypoints configuration
         self.register_buffer('unit_points', generate_bbox_corners_points())
@@ -140,7 +142,7 @@ class MultiviewTemporalSpatialFeatureAggregator(nn.Module):
 
         Returns:
             pixels: Tensor[B * T, N, N_cams, P, 2]
-            features: Tensor[B, N, query_dim]
+            new_content_queries: Tensor[B, N, query_dim]
         """
         B, N, T = trajs.shape
         L, P, N_cams = self.fpn_levels, self.kpt_num, self.camera_nb
@@ -181,7 +183,16 @@ class MultiviewTemporalSpatialFeatureAggregator(nn.Module):
         weights_sum = weights.sum(dim=(1, 4, 5, 6)) # [B, 1, N]
         weights_sum = weights_sum.clamp(min=1e-6)
         weighted_features = weighted_features / weights_sum # [B, query_dim, N]
-        weighted_features = weighted_features.permute(0, 2, 1) # [B, N, query_dim]
+        new_content_queries = weighted_features.permute(0, 2, 1) # [B, N, query_dim]
+
+        if self.residual_mode == "cat":
+            new_content_queries = torch.cat([content_queries, new_content_queries], dim=-1)
+        elif self.residual_mode == "add":
+            new_content_queries = content_queries + new_content_queries
+        elif self.residual_mode == "none":
+            pass
+        else:
+            raise ValueError(f"Invalid residual mode: {self.residual_mode}")
         
-        return pixels, weighted_features
+        return pixels, new_content_queries
     

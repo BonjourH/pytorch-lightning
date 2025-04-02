@@ -184,8 +184,10 @@ class Anchor3DGenerator:
         self.y_grids = torch.arange(-left_y_max, right_y_max + y_interval/2, y_interval)
 
         self.anchors = self._generate_anchors()
-
         
+    def get_anchors(self):
+        return self.anchors
+
     def _generate_anchors(self):
         """生成所有可能的anchors组合，使用矢量化操作"""
         # 创建网格坐标

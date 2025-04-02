@@ -1,31 +1,65 @@
 import torch
 import torch.nn as nn
 from typing import Dict, Optional, Union, Any, List
-from xinnovation.src.core import SourceCameraId, DETECTORS, ANCHOR_GENERATOR, IMAGE_FEATURE_EXTRACTOR, PLUGINS
-from xinnovation.src.components.lightning_module.detectors import FPNImageFeatureExtractor, Anchor3DGenerator
+from xinnovation.src.core import SourceCameraId, DETECTORS, ATTENTION, ANCHOR_GENERATOR, IMAGE_FEATURE_EXTRACTOR, FEEDFORWARD_NETWORK, NORM_LAYERS, build_from_cfg, PLUGINS
+from xinnovation.src.components.lightning_module.detectors import FPNImageFeatureExtractor, Anchor3DGenerator, DecoupledMultiHeadAttention
 from .mts_feature_aggregator import MultiviewTemporalSpatialFeatureAggregator
+from .sparse4d_plugins import AnchorEncoder, TrajectoryRefiner
 
 __all__ = ["Sparse4DDetector"]
 
 @DETECTORS.register_module()
 class Sparse4DDetector(nn.Module):
-    def __init__(self, anchor_generator: Dict,
+    def __init__(self, anchor_encoder: Dict,
                     camera_groups: Dict[str, List[SourceCameraId]],
+                    decoder_op_orders: List[List[str]], # each list represent a single layer
                     feature_extractors: Dict, 
                     mts_feature_aggregator: Dict,
+                    self_attention: Dict,
+                    ffn: Dict,
+                    norm: Dict,
+                    refine: Dict,
+                    temp_attention: Dict,
                     **kwargs):
         super().__init__()
         self.camera_groups = camera_groups
-        self.anchor_generator = ANCHOR_GENERATOR.build(anchor_generator)
-
+        self.decoder_op_orders = decoder_op_orders
+        
+        self.anchor_encoder = PLUGINS.build(anchor_encoder)
+        self.register_buffer("init_trajs", self.anchor_encoder.get_init_trajs(speed=23.0))
+        
         # Create feature extractors for each camera group
         self.feature_extractors = nn.ModuleDict({
             name: IMAGE_FEATURE_EXTRACTOR.build(cfg)
             for name, cfg in feature_extractors.items()
         })
         
-        self.mts_feature_aggregator = PLUGINS.build(mts_feature_aggregator)
-        
+        # build decoder layers
+        self.mts_feature_aggregator = build_from_cfg(mts_feature_aggregator, ATTENTION)
+
+        self.decoder_layer_config_map = {
+            "temp_attention": [temp_attention, ATTENTION],
+            "self_attention": [self_attention, ATTENTION],
+            "ffn": [ffn, FEEDFORWARD_NETWORK],
+            "norm": [norm, NORM_LAYERS],
+            "refine": [refine, PLUGINS]
+        }
+
+        self.decoder_layers = nn.ModuleList()
+        for idx, layer_ops in enumerate(decoder_op_orders):
+            layer = nn.ModuleList()
+            if idx == 0:
+                layer_ops = layer_ops[3:] # start from mts_feature_aggregator
+            for op in layer_ops:
+                if op == "mts_feature_aggregator":
+                    layer.append(self.mts_feature_aggregator)
+                    # use the shared mts_feature_aggregator for all layers
+                else:
+                    cfg, registry = self.decoder_layer_config_map[op]
+                    if cfg is None:
+                        continue
+                    layer.append(build_from_cfg(cfg, registry))
+            self.decoder_layers.append(layer)
     
     def _extract_features(self, group_name: str, imgs: torch.Tensor) -> List[torch.Tensor]:
         """
@@ -56,7 +90,8 @@ class Sparse4DDetector(nn.Module):
                 - camera_ids: List[SourceCameraId], camera ids
             
         Returns:
-            List[Dict[str, torch.Tensor]], decoder outputs at each layer
+            List[torch.Tensor], trajs at each layer
+            List[torch.Tensor], quality at each layer
         """
         
         # Extract features from each camera
@@ -73,16 +108,46 @@ class Sparse4DDetector(nn.Module):
                 feats[i] = feats[i].view(B * T, N_cams, C_i, H_i, W_i)
             for idx, camera_id in enumerate(self.camera_groups[group_name]):
                 all_features_dict[camera_id] = [feat[:, :, idx] for feat in feats] # (B * T, C, H // down_scale_i, W // down_scale_i)
-                
+        
         # Decoder part
+        trajs_prediction = []
+        quality_prediction = []
+
+        tgts = torch.zeros(B, self.num_queries, self.query_dim)
+        tgts = tgts.to(self.init_trajs.device)
+        pos_embeds = self.anchor_encoder(self.init_trajs).unsqueeze(0).repeat(B, 1, 1)
         
-        # Decode trajectories
-        fused_features_dict = {}
-        outputs = self.decoder(fused_features_dict, batch['calibrations'], batch['ego_states'])
-        
+        for layer_idx in range(len(self.decoder_op_orders)):
+            layer_ops = self.decoder_op_orders[layer_idx]
+            layers = self.decoder_layers[layer_idx]
+            
+            for op_idx in range(len(layer_ops)):
+                op, layer = layer_ops[op_idx], layers[op_idx]
+                if op == "mts_feature_aggregator":
+                    all_features_dict = self.mts_feature_aggregator(trajs, 
+                                                                    batch['camera_ids'], 
+                                                                    tgts, 
+                                                                    all_features_dict, 
+                                                                    batch['calibrations'], 
+                                                                    batch['ego_states'], 
+                                                                    pos_embeds)
+                elif op == "temp_attention":
+                    raise NotImplementedError("Temp attention is not implemented")
+                    # tgt = layer(tgts, pos_embeds, histories_tgts, histories_pos_embeds)
+                elif op == "self_attention":
+                    tgts = layer(tgts, pos_embeds)
+                elif op == "ffn":
+                    tgts = layer(tgts)
+                elif op == "norm":
+                    tgts = layer(tgts)
+                elif op == "refine":
+                    trajs, quality = layer(tgts, pos_embeds, trajs)
+                    trajs_prediction.append(trajs)
+                    quality_prediction.append(quality)
+            # order: temp_attn => self_attn => mts_feature_aggregator => ffn => norm => refine
+                    
         # Clear intermediate tensors to save memory
-        # del all_features_dict
-        # del fused_features_dict
-        # torch.cuda.empty_cache()
+        del all_features_dict
+        torch.cuda.empty_cache()
         
-        return outputs 
+        return trajs_prediction, quality_prediction

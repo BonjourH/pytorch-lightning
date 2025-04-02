@@ -1,3 +1,3 @@
-from .self_attention import SelfAttention
+from .decoupled_attention import DecoupledMultiHeadAttention
 
-__all__ = ['SelfAttention'] 
+__all__ = ['DecoupledMultiHeadAttention'] 

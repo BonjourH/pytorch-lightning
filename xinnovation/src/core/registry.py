@@ -159,6 +159,9 @@ class Registry:
 # │   │   │   ├── POS_ENCODING       # 位置编码 (SineEncoding, LearnedEncoding)
 # │   │   │   ├── ATTENTION          # 注意力机制 (SelfAttention, CBAM, TransformerBlock)
 # │   │   │   ├── NORM_LAYERS        # 归一化层 (BatchNorm, LayerNorm, GroupNorm)
+# │   │   │   ├── FEEDFORWARD_NETWORK # 前馈网络 (AsymmetricFFN, FeedForwardNetwork)
+# │   │   │   ├── ACTIVATION          # 激活函数 (ReLU, GELU)
+# │   │   │   ├── DROPOUT            # 丢弃层 (Dropout, DropPath)
 # ├── DATA
 # │   ├── DATASETS           # 数据集 (ImageNet, COCO, KITTI, nuScenes)
 # │   ├── TRANSFORMS         # 数据增强 (RandomFlip, Normalize, ColorJitter)
@@ -213,7 +216,9 @@ ANCHOR_GENERATOR = PLUGINS.create_child("anchor_generator")  # 锚框生成器 (
 POS_ENCODING = PLUGINS.create_child("positional_encoding")  # 位置编码 (SineEncoding, LearnedEncoding)
 NORM_LAYERS = PLUGINS.create_child("norm_layer")  # 归一化层 (BatchNorm, LayerNorm, GroupNorm)
 ATTENTION = PLUGINS.create_child("attention")  # 注意力机制 (SelfAttention, CBAM, TransformerBlock)
-
+FEEDFORWARD_NETWORK = PLUGINS.create_child("feedforward_network")  # 前馈网络 (AsymmetricFFN, FeedForwardNetwork)
+ACTIVATION = PLUGINS.create_child("activation")  # 激活函数 (ReLU, GELU)
+DROPOUT = PLUGINS.create_child("dropout")  # 丢弃层 (Dropout, DropPath)
 # ==========================================
 #                数据体系 (LightningDataModule)
 # ==========================================

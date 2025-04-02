@@ -17,6 +17,8 @@ def build_from_cfg(cfg: Dict[str, Any], registry: Registry) -> Any:
         cfg (Dict[str, Any]): 组件配置
         registry (Registry): 组件注册表
     """
+    if cfg is None:
+        return None
     return registry.build(cfg)
 
 def build_model(cfg: Dict[str, Any], **kwargs) -> Any:

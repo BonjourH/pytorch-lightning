@@ -19,7 +19,16 @@ from xinnovation.src.core import (SourceCameraId, CameraType, CameraParamIndex, 
 # │   │   │   ├── POS_ENCODING       # 位置编码 (SineEncoding, LearnedEncoding)
 # │   │   │   ├── ATTENTION          # 注意力机制 (SelfAttention, CBAM, TransformerBlock)
 # │   │   │   ├── NORM_LAYERS        # 归一化层 (BatchNorm, LayerNorm, GroupNorm)
+# │   │   │   ├── FEEDFORWARD_NETWORK # 前馈网络 (AsymmetricFFN)
+# │   │   │   ├── DROPOUT            # 丢弃层 (Dropout)
 
+query_dim = 256
+dropout = 0.1
+num_groups = 8
+num_decoder = 6
+num_classes = TrajParamIndex.END_OF_INDEX - TrajParamIndex.HAS_OBJECT
+use_temp_attention = False
+with_quality_estimation = False
 def repvgg_backbone(name: str="a1", scales_to_drop: List[int]=[2, 4], use_pretrained: bool=True):
     return dict(
         type="ImageFeatureExtractor",
@@ -32,11 +41,11 @@ def fpn_neck(in_channels: List[int]=[256, 512, 1024]):
     return dict(
         type="FPN",
         in_channels=in_channels,
-        out_channels=256,
+        out_channels=query_dim,
         extra_blocks=0,
         relu_before_extra_convs=False
     )
-    
+
 lightning_module = dict(
     type="Sparse4DModule",
     scheduler=dict(
@@ -60,21 +69,29 @@ lightning_module = dict(
             short_focal_length_camera=[SourceCameraId.FRONT_CENTER_CAMERA],
             rear_camera=[SourceCameraId.REAR_LEFT_CAMERA, SourceCameraId.REAR_RIGHT_CAMERA]
         ),
-        anchor_generator=dict(
-            type="Anchor3DGenerator",
-            front_type="div_x",
-            back_type="div_x",
-            front_params=dict(alpha=0.4, beta=10.0, order=2.0),
-            back_params=dict(alpha=0.35, beta=10.0, order=2.0),
-            front_min_spacing=2.0,
-            front_max_distance=200.0,
-            back_min_spacing=2.0,
-            back_max_distance=100.0,
-            left_y_max=3.75 * 2,
-            right_y_max=3.75 * 2,
-            y_interval=3.75,
-            z_value=0.2,
-            anchor_size=(5.0, 2.0, 1.5) # (length, width, height)
+        anchor_encoder=dict(
+            type="AnchorEncoder",
+            pos_embed_dim=128,
+            dim_embed_dim=32,
+            orientation_embed_dim=32,
+            vel_embed_dim=64,
+            embed_dim=query_dim,
+            anchor_generator_config=dict(
+                type="Anchor3DGenerator",
+                front_type="div_x",
+                back_type="div_x",
+                front_params=dict(alpha=0.4, beta=10.0, order=2.0),
+                back_params=dict(alpha=0.35, beta=10.0, order=2.0),
+                front_min_spacing=2.0,
+                front_max_distance=200.0,
+                back_min_spacing=2.0,
+                back_max_distance=100.0,
+                left_y_max=3.75 * 2,
+                right_y_max=3.75 * 2,
+                y_interval=3.75,
+                z_value=0.2,
+                anchor_size=(5.0, 2.0, 1.5) # (length, width, height)
+            )
         ),
         feature_extractors=dict(
             # Ensure all the feature extractors have the same FPN levels
@@ -94,16 +111,62 @@ lightning_module = dict(
                 neck=fpn_neck()
             )
         ),
+        decoder_op_orders=[[
+                "temp_attention",
+                "self_attention",
+                "norm",
+                "mts_feature_aggregator",
+                "ffn",
+                "norm",
+                "refine",
+            ]
+            for _ in range(num_decoder)
+        ],
         mts_feature_aggregator=dict(
             type="MultiviewTemporalSpatialFeatureAggregator",
-            query_dim=256,
+            query_dim=query_dim,
             num_learnable_points=8,
             learnable_points_range=3.0,
             sequence_length=10,
             temporal_weight_decay=0.5,
             camera_nb=7,
             fpn_levels=3,
+            residual_mode="cat"
         ),
+        self_attention=dict(
+            type="DecoupledMultiHeadAttention",
+            query_dim=query_dim,
+            num_heads=num_groups,
+            dropout=dropout
+        ),
+        ffn=dict(
+            type="AsymmetricFFN",
+            pre_norm=dict(type="LayerNorm", eps=1e-6, normalized_shape=query_dim),
+            in_channels=query_dim * 2,
+            embed_dims=query_dim,
+            feedforward_channels=query_dim * 4,
+            num_fcs=2,
+            act_cfg=dict(type="ReLU", inplace=True),
+            ffn_drop=0.1,
+            add_identity=True
+        ),
+        norm=dict(
+            type="LayerNorm",
+            normalized_shape=query_dim,
+            eps=1e-6
+        ),
+        refine=dict(
+            type="TrajectoryRefiner",
+            query_dim=query_dim,
+            hidden_dim=query_dim,
+            with_quality_estimation=with_quality_estimation,
+        ),
+        temp_attention=dict(
+            type="DecoupledMultiHeadAttention",
+            query_dim=query_dim,
+            num_heads=num_groups,
+            dropout=dropout
+        ) if use_temp_attention else None
     )
 )
 # ============================== 3. Data Config ==============================
