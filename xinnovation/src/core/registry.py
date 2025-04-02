@@ -222,12 +222,12 @@ DROPOUT = PLUGINS.create_child("dropout")  # 丢弃层 (Dropout, DropPath)
 # ==========================================
 #                数据体系 (LightningDataModule)
 # ==========================================
-DATA = LIGHTNING.create_child("data")
+LIGHTNING_DATA_MODULE = LIGHTNING.create_child("data")
 
-DATASETS = DATA.create_child("dataset")     # 数据集 (ImageNet, COCO, KITTI, nuScenes)
-TRANSFORMS = DATA.create_child("transform") # 数据增强 (RandomFlip, Normalize, ColorJitter)
-SAMPLERS = DATA.create_child("sampler")     # 采样策略 (BalancedSampler, WeightedRandomSampler)
-LOADERS = DATA.create_child("loader")       # 数据加载策略 (Dataloader, PrefetchLoader)
+DATASETS = LIGHTNING_DATA_MODULE.create_child("dataset")     # 数据集 (ImageNet, COCO, KITTI, nuScenes)
+TRANSFORMS = LIGHTNING_DATA_MODULE.create_child("transform") # 数据增强 (RandomFlip, Normalize, ColorJitter)
+SAMPLERS = LIGHTNING_DATA_MODULE.create_child("sampler")     # 采样策略 (BalancedSampler, WeightedRandomSampler)
+LOADERS = LIGHTNING_DATA_MODULE.create_child("loader")       # 数据加载策略 (Dataloader, PrefetchLoader)
 
 # ==========================================
 #               训练组件

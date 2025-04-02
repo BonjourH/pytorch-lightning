@@ -1,4 +1,4 @@
-from xinnovation.src.core.registry import LIGHTNING, LIGHTNING_MODULE, DATA, TRAINER
+from xinnovation.src.core.registry import LIGHTNING, LIGHTNING_MODULE, LIGHTNING_DATA_MODULE, TRAINER
 from typing import Dict
 import lightning.pytorch as pl
 from easydict import EasyDict as edict
@@ -9,7 +9,7 @@ class LightningProject:
         self.config = edict(config)
         
         self.model_module = LIGHTNING_MODULE.build(self.config.lightning_module)
-        # self.data_module = DATA.build(self.config.data)
+        self.data_module = LIGHTNING_DATA_MODULE.build(self.config.lightning_data_module)
         # self.trainer = TRAINER.build(self.config.trainer)
         # self.deploy_engine = DeployController(config.deploy)
         # self.evaluation_system = EvaluationCoordinator(config.evaluation)

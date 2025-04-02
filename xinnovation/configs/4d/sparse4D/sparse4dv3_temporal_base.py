@@ -1,5 +1,6 @@
 from typing import List, Dict
 from xinnovation.src.core import (SourceCameraId, CameraType, CameraParamIndex, EgoStateIndex, TrajParamIndex)
+from xinnovation.examples.detector4D.sparse4d_dataset import CameraGroupConfig
 
 # ============================== 1. Base Config ==============================
 
@@ -166,6 +167,18 @@ lightning_module = dict(
     )
 )
 # ============================== 3. Data Config ==============================
+lightning_data_module = dict(
+    type="Sparse4DDataModule",
+    train_list="/home/xinjian/Code/pytorch-lightning/train_clips.txt",
+    val_list="/home/xinjian/Code/pytorch-lightning/val_clips.txt",
+    batch_size=1,
+    num_workers=4,
+    sequence_length=10,
+    shuffle=True,
+    persistent_workers=True,
+    pin_memory=True,
+    camera_groups=[CameraGroupConfig.front_stereo_camera_group(), CameraGroupConfig.short_focal_length_camera_group(), CameraGroupConfig.rear_camera_group()]
+)
 
 
 # ============================== 4. Trainer Config ==============================

@@ -116,28 +116,27 @@ class TrajParamIndex(IntEnum):
     VY = 4          # velocity y
     AX = 5          # acceleration x
     AY = 6          # acceleration y
-    YAW = 7         # orientation yaw
-    COS_YAW = 8     # orientation cos(yaw)
-    SIN_YAW = 9     # orientation sin(yaw)
-    LENGTH = 10      # dimensions
-    WIDTH = 11
-    HEIGHT = 12
-    HAS_OBJECT = 13 # The below are object attributes
-    STATIC = 14
-    OCCLUDED = 15
-    CAR = 16        # The below are object type
-    SUV = 17
-    LIGHTTRUCK = 18
-    TRUCK = 19
-    BUS = 20
-    PEDESTRIAN = 21
-    BICYCLE = 22
-    MOTO = 23
-    CYCLIST = 24
-    MOTORCYCLIST = 25
-    CONE = 26
-    BACKGROUND = 27
-    END_OF_INDEX = 28
+    COS_YAW = 7     # orientation cos(yaw)
+    SIN_YAW = 8     # orientation sin(yaw)
+    LENGTH = 9      # dimensions
+    WIDTH = 10
+    HEIGHT = 11
+    HAS_OBJECT = 12 # The below are object attributes
+    STATIC = 13
+    OCCLUDED = 14
+    CAR = 15        # The below are object type
+    SUV = 16
+    LIGHTTRUCK = 17
+    TRUCK = 18
+    BUS = 19
+    PEDESTRIAN = 20
+    BICYCLE = 21
+    MOTO = 22
+    CYCLIST = 23
+    MOTORCYCLIST = 24
+    CONE = 25
+    BACKGROUND = 26
+    END_OF_INDEX = 27
     
     def __str__(self):
         return self.name
@@ -336,11 +335,12 @@ def tensor_to_trajectory(traj_params: torch.Tensor, traj_id: int = 0, t0: float 
     
     traj_params[TrajParamIndex.HAS_OBJECT:] = torch.sigmoid(traj_params[TrajParamIndex.HAS_OBJECT:])
     
+    yaw = np.arctan2(traj_params[TrajParamIndex.SIN_YAW], traj_params[TrajParamIndex.COS_YAW])
     # Create ObstacleTrajectory object
     return ObstacleTrajectory(
         id=traj_id,
         motion=motion,
-        yaw=float(traj_params[TrajParamIndex.YAW]),
+        yaw=yaw,
         length=float(traj_params[TrajParamIndex.LENGTH]),
         width=float(traj_params[TrajParamIndex.WIDTH]),
         height=float(traj_params[TrajParamIndex.HEIGHT]),
