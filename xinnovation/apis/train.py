@@ -3,6 +3,7 @@ from xinnovation.src.core.config import Config
 import lightning as L
 import argparse
 from xinnovation.examples.detector4D import Sparse4DModule
+from xinnovation.src.components.trainer import LightningTrainer
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Train a 4D object detector')

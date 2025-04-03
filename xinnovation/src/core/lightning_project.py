@@ -10,7 +10,7 @@ class LightningProject:
         
         self.model_module = LIGHTNING_MODULE.build(self.config.lightning_module)
         self.data_module = LIGHTNING_DATA_MODULE.build(self.config.lightning_data_module)
-        # self.trainer = TRAINER.build(self.config.trainer)
+        self.trainer = TRAINER.build(self.config.lightning_trainer)
         # self.deploy_engine = DeployController(config.deploy)
         # self.evaluation_system = EvaluationCoordinator(config.evaluation)
 

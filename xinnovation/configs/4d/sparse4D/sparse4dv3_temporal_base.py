@@ -30,6 +30,10 @@ num_decoder = 6
 num_classes = TrajParamIndex.END_OF_INDEX - TrajParamIndex.HAS_OBJECT
 use_temp_attention = False
 with_quality_estimation = False
+wandb_project_name = "sparse4d_v1"
+exp_name = "sparse4dv3_temporal_base"
+save_dir = "/home/xinjian/Code/pytorch-lightning/checkpoints"
+
 def repvgg_backbone(name: str="a1", scales_to_drop: List[int]=[2, 4], use_pretrained: bool=True):
     return dict(
         type="ImageFeatureExtractor",
@@ -180,8 +184,60 @@ lightning_data_module = dict(
     camera_groups=[CameraGroupConfig.front_stereo_camera_group(), CameraGroupConfig.short_focal_length_camera_group(), CameraGroupConfig.rear_camera_group()]
 )
 
-
 # ============================== 4. Trainer Config ==============================
+lightning_trainer = dict(
+    type="LightningTrainer",
+    # Acceleration parameters
+    accelerator="gpu",
+    devices=[0],
+    num_nodes=1,
+    precision="16-mixed",
+    strategy="auto",
+    sync_batchnorm=False,
+    use_distributed_sampler=True,
+    benchmark=False,
+    plugins=None,
+    # Checkpoint and logger parameters
+    enable_checkpointing=True,
+    callbacks=[
+        dict(type="CheckpointCallback", dirpath=save_dir, filename='epoch-{epoch:02d}', save_top_k=2, save_last=True, monitor="train/loss_epoch"),
+        dict(type="LearningRateMonitorCallback", logging_interval="step"),
+        dict(type="FilteredProgressBarCallback", metrics_to_display=["train/loss_epoch", "val/loss"]),
+        # dict(type="EarlyStoppingCallback", monitor="train/loss_epoch", mode="min", patience=10, min_delta=0.0001),
+    ],
+    logger=[
+        # dict(type="LightningWandbLogger", project=wandb_project_name, name=exp_name, save_dir=save_dir, keys_to_log=[], use_optional_metrics=False),
+        dict(type="LightningTensorBoardLogger", name=exp_name, save_dir=save_dir, default_hp_metric=False),
+        # dict(type="LightningCSVLogger", save_dir=save_dir),
+    ],
+    default_root_dir=save_dir,
+    enable_model_summary=True,
+    # Training loop parameters
+    max_epochs=1000,
+    min_epochs=None,
+    max_steps=-1,
+    min_steps=None,
+    max_time=None,
+    limit_train_batches=1.0,
+    limit_val_batches=1.0,  
+    limit_test_batches=1.0,
+    limit_predict_batches=1.0,
+    overfit_batches=0.0,
+    val_check_interval=1.0,
+    check_val_every_n_epoch=3,
+    num_sanity_val_steps=1,
+    log_every_n_steps=50,
+    enable_progress_bar=True,
+    gradient_clip_val=None,
+    gradient_clip_algorithm="norm",
+    deterministic=True,
+    # Profiling parameters
+    profiler=None,
+    detect_anomaly=False,
+    # Other parameters
+    fast_dev_run=False,
+    reload_dataloaders_every_n_epochs=0,
+)
 
 
 # ============================== 5. Evaluation Config ==============================
