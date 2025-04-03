@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from torch.nn.parallel import parallel_apply
 from xinnovation.src.utils.debug_utils import check_nan_or_inf
 
-check_abnormal = True
+check_abnormal = False
 
 
 def grid_sample_fpn_features(fpn_features: List[torch.Tensor], 

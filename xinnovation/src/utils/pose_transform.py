@@ -1,6 +1,11 @@
 import torch
 from xinnovation.src.core import TrajParamIndex, EgoStateIndex, CameraParamIndex, CameraType
 from xinnovation.src.utils.latency_utils import measure_gpu_latency, measure_average_gpu_latency
+from typing import Tuple
+from xinnovation.src.utils.debug_utils import check_nan_or_inf
+import numpy as np
+
+check_abnormal = False
 
 def get_transform_from_object_to_camera(
     trajs: torch.Tensor,
@@ -152,11 +157,7 @@ def camera_to_pixel(cam_points: torch.Tensor, calib_params: torch.Tensor, normal
     k4 = calib_params[..., CameraParamIndex.K4].unsqueeze(2)  # [B, C, 1]
     p1 = calib_params[..., CameraParamIndex.P1].unsqueeze(2)  # [B, C, 1]
     p2 = calib_params[..., CameraParamIndex.P2].unsqueeze(2)  # [B, C, 1]
-    
-    # Get image dimensions
-    img_width = calib_params[..., CameraParamIndex.IMAGE_WIDTH].unsqueeze(2)  # [B, C, 1]
-    img_height = calib_params[..., CameraParamIndex.IMAGE_HEIGHT].unsqueeze(2)  # [B, C, 1]
-    
+
     # Check if points are behind the camera
     x_cam = cam_points[..., 0] # [B, C, NTP]
     y_cam = cam_points[..., 1] # [B, C, NTP]
@@ -168,24 +169,25 @@ def camera_to_pixel(cam_points: torch.Tensor, calib_params: torch.Tensor, normal
     # Normalize coordinates
     x_normalized = x_cam / z_cam 
     y_normalized = y_cam / z_cam
+
+    normalized_r_square = x_normalized * x_normalized + y_normalized * y_normalized
+    normalized_r = torch.sqrt(normalized_r_square)
+    normalized_r = torch.where(normalized_r == 0, torch.ones_like(normalized_r) * 1e-10, normalized_r)
+    theta = torch.atan(normalized_r)
     
     # calculate fisheye distorted coordinates
-    fisheye_r = torch.sqrt(x_normalized * x_normalized + y_normalized * y_normalized)
-    fisheye_r = torch.where(fisheye_r == 0, torch.ones_like(fisheye_r) * 1e-10, fisheye_r)
+    theta2 = theta * theta
+    theta4 = theta2 * theta2
+    theta6 = theta4 * theta2
+    theta8 = theta4 * theta4
     
-    fisheye_theta = torch.atan(fisheye_r)
-    fisheye_theta2 = fisheye_theta * fisheye_theta
-    fisheye_theta4 = fisheye_theta2 * fisheye_theta2
-    fisheye_theta6 = fisheye_theta4 * fisheye_theta2
-    fisheye_theta8 = fisheye_theta4 * fisheye_theta4
-    
-    fisheye_theta_d = fisheye_theta * (1 + k1 * fisheye_theta2 + k2 * fisheye_theta4 + k3 * fisheye_theta6 + k4 * fisheye_theta8)
-    scaling = torch.where(fisheye_r > 0, fisheye_theta_d / fisheye_r, torch.ones_like(fisheye_r))
+    distorted_theta = theta * (1 + k1 * theta2 + k2 * theta4 + k3 * theta6 + k4 * theta8)
+    scaling = torch.where(normalized_r > 0, distorted_theta / normalized_r, torch.ones_like(normalized_r))
     
     # calculate the derivation of the distorted radius to filter the folded pixels
     # distorted_theta = theta * (1 + k1 * theta^2 + k2 * theta^4 + k3 * theta^6 + k4 * theta^8)
     # d(distorted_theta) / d(theta) = 1 + 3 * k1 * theta^2 + 5 * k2 * theta^4 + 7 * k3 * theta^6 + 9 * k4 * theta^8
-    fisheye_derivation = 1 + 3 * k1 * fisheye_theta2 + 5 * k2 * fisheye_theta4 + 7 * k3 * fisheye_theta6 + 9 * k4 * fisheye_theta8
+    fisheye_derivation = 1 + 3 * k1 * theta2 + 5 * k2 * theta4 + 7 * k3 * theta6 + 9 * k4 * theta8
     folded_fisheye_pixel_mask = (fisheye_derivation < 0)
     
     x_distorted_fisheye = x_normalized * scaling
@@ -194,9 +196,14 @@ def camera_to_pixel(cam_points: torch.Tensor, calib_params: torch.Tensor, normal
     y_distorted_fisheye[folded_fisheye_pixel_mask] = -1.0 # -1 is the invalid pixel
     
     # calculate general distorted coordinates
-    general_r2 = x_normalized * x_normalized + y_normalized * y_normalized
+    general_r2 = normalized_r_square
     general_r4 = general_r2 * general_r2
     general_r6 = general_r4 * general_r2
+    # NOTE: here the rr2, r4, r6 could be infinite if z_cam close to zero, and in this case,
+    # it will generate NaN values in later calculation, so we need to filter them. So a simple
+    # solution is to filter the angle with large theta.
+    max_general_distorted_angle = torch.tensor(70 * np.pi / 180).to(theta.device)
+    invalid_angle_mask = (theta > max_general_distorted_angle) | (theta < -max_general_distorted_angle)
     
     radial = 1 + k1 * general_r2 + k2 * general_r4 + k3 * general_r6
     
@@ -210,8 +217,12 @@ def camera_to_pixel(cam_points: torch.Tensor, calib_params: torch.Tensor, normal
     
     x_distorted_general = x_normalized * radial + dx
     y_distorted_general = y_normalized * radial + dy
-    x_distorted_general[folded_general_pixel_mask] = -1.0 # -1 is the invalid pixel
-    y_distorted_general[folded_general_pixel_mask] = -1.0 # -1 is the invalid pixel
+
+    general_invalid_mask = invalid_angle_mask | folded_general_pixel_mask
+    x_distorted_general[general_invalid_mask] = -1.0 # -1 is the invalid pixel
+    y_distorted_general[general_invalid_mask] = -1.0 # -1 is the invalid pixel
+    check_nan_or_inf(x_distorted_general, active=check_abnormal, name="x_distorted_general")
+    check_nan_or_inf(y_distorted_general, active=check_abnormal, name="y_distorted_general")
     
     # calculate pinhole distorted coordinates
     # no need to calculate
@@ -220,15 +231,24 @@ def camera_to_pixel(cam_points: torch.Tensor, calib_params: torch.Tensor, normal
     
     # combine all distorted coordinates
     fish_eye_mask = (camera_type == CameraType.FISHEYE).unsqueeze(2)
-    general_distort_mask = (camera_type == CameraType.GENERAL_DISTORT).unsqueeze(2)
+    # general_distort_mask = (camera_type == CameraType.GENERAL_DISTORT).unsqueeze(2)
     # pinhole_mask = (camera_type == CameraType.PINHOLE).unsqueeze(2)
     
     x_distorted = torch.where(fish_eye_mask, x_distorted_fisheye, x_distorted_general)
     y_distorted = torch.where(fish_eye_mask, y_distorted_fisheye, y_distorted_general)
     
     # apply camera matrix
-    x_pixel = fx * x_distorted + cx
+    x_pixel = fx * x_distorted + cx # [B, C, NTP]
     y_pixel = fy * y_distorted + cy
+    check_nan_or_inf(x_pixel, active=check_abnormal, name="x_pixel")
+    check_nan_or_inf(y_pixel, active=check_abnormal, name="y_pixel")
+
+    # Get image dimensions
+    img_width = calib_params[..., CameraParamIndex.IMAGE_WIDTH].unsqueeze(2)  # [B, C, 1]
+    img_height = calib_params[..., CameraParamIndex.IMAGE_HEIGHT].unsqueeze(2)  # [B, C, 1]
+
+    # get the invalid mask
+    invalid_mask = (x_pixel < 0) | (x_pixel > img_width - 1) | (y_pixel < 0) | (y_pixel > img_height - 1) | (z_cam <= 0)
     
     # normalize to [0, 1] for consistency with the visibility check in gather_point_features
     if normalize:
@@ -237,9 +257,12 @@ def camera_to_pixel(cam_points: torch.Tensor, calib_params: torch.Tensor, normal
     else:
         x_norm = x_pixel
         y_norm = y_pixel
+
+    check_nan_or_inf(x_norm, active=check_abnormal, name="x_norm")
+    check_nan_or_inf(y_norm, active=check_abnormal, name="y_norm")
     
     points_2d = torch.stack([x_norm, y_norm], dim=-1) # [B, C, NTP, 2]
-    points_2d[(z_cam <= 0)] = -2.0 # [B, C, NTP]
+    points_2d[invalid_mask] = -1.0 # [B, C, NTP]
     points_2d = points_2d.view(B, C, N, T, P, 2)
     
     # readjust the dimension order: as we'll do feature sampling from sequential images

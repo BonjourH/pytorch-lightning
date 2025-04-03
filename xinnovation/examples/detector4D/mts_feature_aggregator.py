@@ -10,6 +10,8 @@ from xinnovation.src.utils.debug_utils import check_nan_or_inf
 
 __all__ = ["MultiviewTemporalSpatialFeatureAggregator"]
 
+check_abnormal = False
+
 @ATTENTION.register_module()
 class MultiviewTemporalSpatialFeatureAggregator(nn.Module):
     """Sample features from multiple views and temporal frames.
@@ -126,8 +128,12 @@ class MultiviewTemporalSpatialFeatureAggregator(nn.Module):
         else:
             kpts_all = self.unit_points # [3, 9]
 
+        check_nan_or_inf(kpts_all, active=check_abnormal, name="kpts_all")
+
         # 2. Project the points to the image plane
-        return project_points_to_image(trajs, calibrations, ego_states, kpts_all, normalize=True)
+        pixels = project_points_to_image(trajs, calibrations, ego_states, kpts_all, normalize=True)
+        check_nan_or_inf(pixels, active=check_abnormal, name="pixels")
+        return pixels
 
     def forward(self,
                 trajs: torch.Tensor,
@@ -157,32 +163,30 @@ class MultiviewTemporalSpatialFeatureAggregator(nn.Module):
         # 1. Project the points to the image plane
         pixels = self.cal_projected_pixels(trajs, calibrations, ego_states, content_queries, pos_queries)
         # pixels: Tensor[B * T, N, N_cams, P, 2]
+        invalid_mask = (pixels[..., 0] < 0.0) # [B * T, N, N_cams, P]
         
         # 2. Generate the weights for fusing features
         weights = self._generate_kpts_feature_weight(trajs, content_queries, pos_queries)
         # weights: Tensor[B * T, N, N_cams, P, L]
-        invalid_mask = (pixels[..., 0] < 0.0) # [B * T, N, N_cams, P]
         weights[invalid_mask] = 0.0
         
         # 3. Sample the features
         features_list = []
-
-        check_abnormal = True
         
         for ic in range(N_cams):
             camera_id = camera_ids[ic]
             # sample features from different scales
             fpn_features = features_dict[camera_id] # List[Tensor[B*T, C, H_i, W_i]] of different scales
             assert len(fpn_features) == L, f"The number of FPN levels must be equal to the number of feature scales, but got {len(fpn_features)} and {L}"
-            pixels_ic = pixels[:, :, ic, :, :] # [B * T, N, P, 2]
+            pixels_ic = pixels[:, :, ic, :, :] * 2 - 1.0 # [B * T, N, P, 2], convert to [-1, 1] for feature sampling
             check_nan_or_inf(pixels_ic, active=check_abnormal, name=f"pixels_ic_{ic}")
             check_nan_or_inf(fpn_features, active=check_abnormal, name=f"fpn_features_{ic}")
             stacked_sampled_features = grid_sample_fpn_features(fpn_features, 
-                                                                               pixels_ic,
-                                                                               mode='bilinear',
-                                                                               padding_mode='zeros',
-                                                                               align_corners=True,
-                                                                               dim=-1) 
+                                                                pixels_ic,
+                                                                mode='bilinear',
+                                                                padding_mode='zeros',
+                                                                align_corners=True,
+                                                                dim=-1) 
             check_nan_or_inf(stacked_sampled_features, active=check_abnormal, name=f"stacked_sampled_features_{ic}")
             features_list.append(stacked_sampled_features) # List[Tensor[B * T, C, N, P, L]]
             

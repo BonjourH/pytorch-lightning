@@ -23,6 +23,7 @@ from xinnovation.examples.detector4D.sparse4d_dataset import CameraGroupConfig
 # │   │   │   ├── DROPOUT            # 丢弃层 (Dropout)
 
 query_dim = 256
+seq_length = 5
 dropout = 0.1
 num_groups = 8
 num_decoder = 6
@@ -135,7 +136,7 @@ lightning_module = dict(
             query_dim=query_dim,
             num_learnable_points=8,
             learnable_points_range=3.0,
-            sequence_length=10,
+            sequence_length=seq_length,
             temporal_weight_decay=0.5,
             camera_nb=7,
             fpn_levels=3,
@@ -195,7 +196,7 @@ lightning_data_module = dict(
     val_list="/home/xinjian/Code/pytorch-lightning/val_clips.txt",
     batch_size=1,
     num_workers=4,
-    sequence_length=10,
+    sequence_length=seq_length,
     shuffle=True,
     persistent_workers=True,
     pin_memory=True,

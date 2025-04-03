@@ -118,7 +118,7 @@ class Sparse4DDetector(nn.Module):
             List[torch.Tensor], quality at each layer
         """
 
-        check_abnormal = True
+        check_abnormal = False
         
         # Extract features from each camera
         all_features_dict: Dict[SourceCameraId, List[torch.Tensor]] = {}  

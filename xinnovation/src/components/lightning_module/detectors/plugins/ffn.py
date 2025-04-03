@@ -102,7 +102,7 @@ class AsymmetricFFN(nn.Module):
         
 
     def forward(self, x):
-        check_abnormal = True
+        check_abnormal = False
         check_nan_or_inf(x, active=check_abnormal, name="before pre_norm")
         if self.pre_norm is not None:
             x = self.pre_norm(x)
