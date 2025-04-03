@@ -66,7 +66,7 @@ class AnchorEncoder(nn.Module):
         self.init_trajs = torch.rand(self.anchors.shape[0], TrajParamIndex.END_OF_INDEX)
         self.init_trajs[:, TrajParamIndex.X:TrajParamIndex.Z + 1] = self.anchors[:, :3]
         self.init_trajs[:, TrajParamIndex.LENGTH:TrajParamIndex.HEIGHT + 1] = self.anchors[:, 3:6]
-        self.init_trajs[:, TrajParamIndex.X] += 4.5 # front bumper to imu
+        self.init_trajs[:, TrajParamIndex.X] = self.init_trajs[:, TrajParamIndex.X] + 4.5 # front bumper to imu
         self.init_trajs = self.init_trajs.unsqueeze(0)
         return self.init_trajs
     
@@ -168,17 +168,24 @@ class TrajectoryRefiner(nn.Module):
         cls_out = self.cls_layers(feature)
         quality_out = self.quality_layers(feature) if self.with_quality_estimation else None
 
+        # Create a new tensor instead of modifying the input
+        refined_trajs = trajs.clone()
+        
         # 1. Do refinement for trajs regression part
         if self.normalize_yaw:
             reg_out[..., [TrajParamIndex.COS_YAW, TrajParamIndex.SIN_YAW]] = torch.nn.functional.normalize(
                 reg_out[..., [TrajParamIndex.COS_YAW, TrajParamIndex.SIN_YAW]], dim=-1
             )
-        trajs[..., :self.reg_dim] = reg_out + trajs[..., :self.reg_dim]
+            
+        # Update the new tensor instead of the input
+        refined_trajs[..., :self.reg_dim] = reg_out + trajs[..., :self.reg_dim]
+        
         # TODO: the refined x could varies in a large range, for example we expect the refiner could
         # also refine x from 200 to 100, so it's better to find a way to normalize the x for better training.
         # For example we use the log(dimension) to remove the dimension difference. we want to deal with x
         # in a similar way.
         
         # 2. Set regression part for cls part
-        trajs[..., -self.cls_dim:] = cls_out
-        return trajs, quality_out
+        refined_trajs[..., -self.cls_dim:] = cls_out
+        
+        return refined_trajs, quality_out

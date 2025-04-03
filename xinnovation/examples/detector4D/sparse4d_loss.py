@@ -18,6 +18,7 @@ class Sparse4DLossWithDAC(nn.Module):
     def __init__(self, layer_loss_weights: List[float], **kwargs):
         super().__init__()
         # store matching history of the first batch of different layers
+        self.layer_loss_weights = layer_loss_weights
         self.matching_history: Dict[int, List[Tuple[int, int]]] = {} # layer_idx -> List[(gt_idx, pred_idx)]
     
     def reset_matching_history(self):
@@ -100,7 +101,7 @@ class Sparse4DLossWithDAC(nn.Module):
         
         losses = {}
 
-        B, N, M = gt_trajs.shape[0], gt_trajs.shape[1], outputs[0].shape[1]
+        B, M, N = gt_trajs.shape[0], gt_trajs.shape[1], outputs[0].shape[1]
 
         # 1. Add loss of standard decoders
         for layer_idx, pred_trajs in enumerate(outputs):
@@ -124,7 +125,7 @@ class Sparse4DLossWithDAC(nn.Module):
                 # 标记已匹配的轨迹
                 unmatched_mask[b, pred_idx] = False
             
-            layer_loss_weight = self.hyper_parameters.layer_loss_weights[layer_idx]
+            layer_loss_weight = self.layer_loss_weights[layer_idx]
             # 堆叠所有匹配的轨迹
             if matched_preds:  # 如果存在匹配的轨迹
                 matched_preds = torch.cat(matched_preds, dim=0)  # [total_matches, TrajParamIndex.END_OF_INDEX]

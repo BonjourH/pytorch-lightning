@@ -66,7 +66,7 @@ lightning_module = dict(
     ),
     loss=dict(
         type="Sparse4DLossWithDAC",
-        layer_loss_weights=[0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
+        layer_loss_weights=[0.5, 0.6, 0.6, 0.7, 0.7, 0.8, 0.9],
     ),
     detector=dict(
         type="Sparse4DDetector",
@@ -176,7 +176,7 @@ lightning_module = dict(
         ) if use_temp_attention else None
     ),
     debug_config = dict(
-        visualize_intermediate_results=True,
+        visualize_intermediate_results=False,
         visualize_intermediate_results_dir="/home/xinjian/Code/pytorch-lightning/visualize_intermediate_results",
         render_gt_trajs=True,
         render_init_trajs=False,
@@ -252,7 +252,7 @@ lightning_trainer = dict(
     deterministic=True,
     # Profiling parameters
     profiler=None,
-    detect_anomaly=False,
+    detect_anomaly=True,
     # Other parameters
     fast_dev_run=False,
     reload_dataloaders_every_n_epochs=0,

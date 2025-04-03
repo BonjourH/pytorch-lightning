@@ -36,13 +36,6 @@ class Sparse4DModule(LightningDetector):
     def forward(self, batch) -> List[Dict]:
         return self.detector(batch)
     
-    def training_step(self, batch, batch_idx):
-        x, y = batch
-        preds = self(x)
-        loss = self.criterion(preds, y)
-        self.log("train_loss", loss)
-        return loss
-    
     def _render_trajs_on_imgs(self, 
                       trajs: torch.Tensor, 
                       camera_ids: List[SourceCameraId],
@@ -334,8 +327,6 @@ class Sparse4DModule(LightningDetector):
             for camera_id in concat_imgs.keys():
                 img_name = f'{camera_id.name}_{batch_idx}.png'
                 cv2.imwrite(os.path.join(save_dir, img_name), concat_imgs[camera_id])
-            
-            exit(0)
 
         return loss_dict
     
