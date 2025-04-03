@@ -184,6 +184,9 @@ class Anchor3DGenerator:
         self.y_grids = torch.arange(-left_y_max, right_y_max + y_interval/2, y_interval)
 
         self.anchors = self._generate_anchors()
+
+    def get_anchor_num(self):
+        return self.anchors.shape[0]
         
     def get_anchors(self):
         return self.anchors

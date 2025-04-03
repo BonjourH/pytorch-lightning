@@ -33,7 +33,8 @@ with_quality_estimation = False
 wandb_project_name = "sparse4d_v1"
 exp_name = "sparse4dv3_temporal_base"
 save_dir = "/home/xinjian/Code/pytorch-lightning/checkpoints"
-
+checkpoint_dir = "/home/xinjian/Code/pytorch-lightning/checkpoints"
+resume = False
 def repvgg_backbone(name: str="a1", scales_to_drop: List[int]=[2, 4], use_pretrained: bool=True):
     return dict(
         type="ImageFeatureExtractor",
@@ -71,7 +72,7 @@ lightning_module = dict(
         type="Sparse4DDetector",
         camera_groups=dict(
             front_stereo_camera=[SourceCameraId.FRONT_LEFT_CAMERA, SourceCameraId.FRONT_RIGHT_CAMERA],
-            short_focal_length_camera=[SourceCameraId.FRONT_CENTER_CAMERA],
+            short_focal_length_camera=[SourceCameraId.FRONT_CENTER_CAMERA, SourceCameraId.SIDE_LEFT_CAMERA, SourceCameraId.SIDE_RIGHT_CAMERA],
             rear_camera=[SourceCameraId.REAR_LEFT_CAMERA, SourceCameraId.REAR_RIGHT_CAMERA]
         ),
         anchor_encoder=dict(
@@ -107,23 +108,28 @@ lightning_module = dict(
             ),
             short_focal_length_camera=dict(
                 type="FPNImageFeatureExtractor",
-                backbone=repvgg_backbone(name="a1", scales_to_drop=[2, 4], use_pretrained=True),
+                backbone=repvgg_backbone(name="a1", scales_to_drop=[2], use_pretrained=True),
                 neck=fpn_neck()
             ),
             rear_camera=dict(
                 type="FPNImageFeatureExtractor",
-                backbone=repvgg_backbone(name="a1", scales_to_drop=[2, 4], use_pretrained=True),
+                backbone=repvgg_backbone(name="a1", scales_to_drop=[2], use_pretrained=True),
                 neck=fpn_neck()
             )
         ),
-        decoder_op_orders=[[
-                "temp_attention",
+        decoder_op_orders= [
+            [
+                "mts_feature_aggregator",
+                "ffn",
+                "refine",
+            ]] + [
+            [
                 "self_attention",
                 "mts_feature_aggregator",
                 "ffn",
                 "refine",
             ]
-            for _ in range(num_decoder)
+            for _ in range(num_decoder - 1)
         ],
         mts_feature_aggregator=dict(
             type="MultiviewTemporalSpatialFeatureAggregator",
@@ -141,12 +147,12 @@ lightning_module = dict(
             query_dim=query_dim,
             num_heads=num_groups,
             dropout=dropout,
-            post_norm=dict(type="LayerNorm", eps=1e-6, normalized_shape=query_dim),
+            post_norm=dict(type="LayerNorm", eps=1e-5, normalized_shape=query_dim),
         ),
         ffn=dict(
             type="AsymmetricFFN",
-            pre_norm=dict(type="LayerNorm", eps=1e-6, normalized_shape=query_dim * 2),
-            post_norm=dict(type="LayerNorm", eps=1e-6, normalized_shape=query_dim),
+            pre_norm=dict(type="LayerNorm", eps=1e-5, normalized_shape=query_dim * 2),
+            post_norm=dict(type="LayerNorm", eps=1e-5, normalized_shape=query_dim),
             in_channels=query_dim * 2,
             embed_dims=query_dim,
             feedforward_channels=query_dim * 4,

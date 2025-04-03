@@ -16,6 +16,10 @@ class LayerNorm(nn.LayerNorm):
     """
     def __init__(self, normalized_shape, eps=1e-5, elementwise_affine=True):
         super().__init__(normalized_shape, eps=eps, elementwise_affine=elementwise_affine)
+        
+    def init_weights(self):
+        nn.init.ones_(self.weight.data)
+        nn.init.zeros_(self.bias.data)
 
 @NORM_LAYERS.register_module()
 class GroupNorm(nn.GroupNorm):

@@ -2,16 +2,19 @@ import torch
 import torch.nn as nn
 from typing import Dict, Optional, Union, Any, List, Tuple
 
-import lightning.pytorch as pl
-from xinnovation.src.core import LIGHTNING_MODULE, SourceCameraId
+import lightning.pytorch as L
+from xinnovation.src.core import LIGHTNING_MODULE, SourceCameraId, TrajParamIndex
 from xinnovation.src.components.lightning_module import LightningDetector
 from xinnovation.src.utils.math_utils import sample_bbox_edge_points
+from xinnovation.src.utils.pose_transform import project_points_to_image
 from .sparse4d_detector import Sparse4DDetector
 from .sparse4d_loss import Sparse4DLossWithDAC
+from .sparse4d_dataset import TrainingSample
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 import json
+import os
 
 
 __all__ = ["Sparse4DModule"]
@@ -58,7 +61,7 @@ class Sparse4DModule(LightningDetector):
             concat_imgs: Dict[SourceCameraId, np.ndarray]
         """
         
-        pixels, _ = project_points_to_image(trajs, calibrations, ego_states, self.bbox_edge_points)
+        pixels = project_points_to_image(trajs, calibrations, ego_states, self.bbox_edge_points)
         B, C, N, T, P, _ = pixels.shape # [B, C, N, T, P, 2]
         
         # disable pixels of false positive trajectories
@@ -282,7 +285,7 @@ class Sparse4DModule(LightningDetector):
     def training_step(self, batch: Dict, batch_idx: int) -> Dict:
         """Training step."""
         # # Forward pass
-        outputs, c_outputs = self(batch)
+        outputs, c_outputs, quality = self(batch)
         
         # # Compute loss
         loss_dict = self.criterion(batch['trajs'], outputs, c_outputs)
@@ -332,7 +335,7 @@ class Sparse4DModule(LightningDetector):
     def validation_step(self, batch: Dict, batch_idx: int) -> Dict:
         """Validation step."""
         # Forward pass
-        outputs, c_outputs = self(batch)
+        outputs, c_outputs, quality = self(batch)
         
         # Compute loss
         loss_dict = self.criterion(batch['trajs'], outputs, c_outputs)
@@ -404,7 +407,7 @@ class Sparse4DModule(LightningDetector):
     
     def predict_step(self, batch: Dict, batch_idx: int, dataloader_idx: int = 0) -> Dict:
         """Prediction step."""
-        outputs, _ = self(batch)
+        outputs, _, _ = self(batch)
         self.predict_step_outputs.append(outputs)
         return outputs
     

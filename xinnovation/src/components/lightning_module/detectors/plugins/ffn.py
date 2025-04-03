@@ -82,6 +82,23 @@ class AsymmetricFFN(nn.Module):
                 if in_channels == embed_dims
                 else Linear(self.in_channels, embed_dims)
             )
+        
+    def init_weights(self):
+        for layer in self.layers:
+            if isinstance(layer, nn.Linear):
+                nn.init.xavier_normal_(layer.weight.data)
+                if layer.bias is not None:
+                    nn.init.zeros_(layer.bias.data)
+        if self.add_identity:
+            if isinstance(self.identity_fc, nn.Linear):
+                nn.init.xavier_normal_(self.identity_fc.weight.data)
+                if self.identity_fc.bias is not None:
+                    nn.init.zeros_(self.identity_fc.bias.data)
+        if self.pre_norm is not None:
+            self.pre_norm.init_weights()
+        if self.post_norm is not None:
+            self.post_norm.init_weights()
+        
 
     def forward(self, x):
         if self.pre_norm is not None:

@@ -67,11 +67,11 @@ def generate_unit_cube_points(num_points: int = 25):
     return points
 
 
-def generate_bbox_corners_points() -> torch.Tensor:
+def generate_bbox_corners_points(with_origin: bool=True) -> torch.Tensor:
     """Generate sample points on corners of 3D bounding box.
     
     Returns:
-        Tensor of shape [8, 3] containing sampled points
+        Tensor of shape [3, P] containing sampled points
     """
     corners = torch.tensor([
         [0.5, 0.5, -0.5], # front left bottom
@@ -83,6 +83,8 @@ def generate_bbox_corners_points() -> torch.Tensor:
         [-0.5, -0.5, 0.5], # rear right top
         [-0.5, 0.5, 0.5], # rear left top
     ]).transpose(0, 1) # [3, 8]
+    if with_origin:
+        corners = torch.cat([torch.zeros(3, 1), corners], dim=1)
     return corners
 
 def sample_bbox_edge_points(n_points_per_edge: int, include_corners: bool=True) -> torch.Tensor:

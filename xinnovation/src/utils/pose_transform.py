@@ -38,7 +38,9 @@ def get_transform_from_object_to_camera(
     acc_x = trajs[..., TrajParamIndex.AX].unsqueeze(-1)  # [B, N, 1]
     acc_y = trajs[..., TrajParamIndex.AY].unsqueeze(-1)  # [B, N, 1]
     
-    yaw = trajs[..., TrajParamIndex.YAW].unsqueeze(-1)  # [B, N, 1]
+    cos_yaw = trajs[..., TrajParamIndex.COS_YAW].unsqueeze(-1)  # [B, N, 1]
+    sin_yaw = trajs[..., TrajParamIndex.SIN_YAW].unsqueeze(-1)  # [B, N, 1]
+    yaw = torch.atan2(sin_yaw, cos_yaw)  # [B, N, 1]
     
     # Calculate position at time t using motion model (constant acceleration)
     # x(t) = x0 + v0*t + 0.5*a*t^2
@@ -297,8 +299,8 @@ def project_points_to_image(trajs: torch.Tensor,
     # in matrix multiplication, the cam_points is float16, but the calibrations is float32
     # so we need to cast the cam_points to float32
     
-    pixels, invalid_mask = camera_to_pixel(cam_points, calibrations, normalize)
-    return pixels, invalid_mask
+    pixels = camera_to_pixel(cam_points, calibrations, normalize)
+    return pixels
 
 if __name__ == "__main__":
     B, N, T, C, P = 32, 128, 10, 7, 128

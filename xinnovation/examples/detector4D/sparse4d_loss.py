@@ -79,19 +79,22 @@ class Sparse4DLossWithDAC(nn.Module):
         if len(indices) > 0:
             self.matching_history[layer_idx].append(indices[0]) # only record the first batch of different layers
 
-    def forward(self, gt_trajs: torch.Tensor, valid_gt_nbs: torch.Tensor, outputs: List[torch.Tensor], c_outputs: List[torch.Tensor]=None) -> Dict[str, torch.Tensor]:
+    def forward(self, gt_trajs: torch.Tensor, outputs: List[torch.Tensor], c_outputs: List[torch.Tensor]=None) -> Dict[str, torch.Tensor]:
         """
         Forward pass to compute losses.
         
         Args:
             gt_trajs: Ground truth trajectories [B, M, TrajParamIndex.END_OF_INDEX]
-            valid_gt_nbs: Valid ground truth number of each batch [B]
             outputs: List of predicted trajectories [B, N, TrajParamIndex.END_OF_INDEX] of decoders from each layer
             c_outputs: List of predicted trajectories from cross-attention decoder [B, N, TrajParamIndex.END_OF_INDEX]
         
         Returns:
             losses: Dictionary of losses
         """
+        # calculate the valid gt number of each batch
+        trajs_mask = gt_trajs[..., TrajParamIndex.HAS_OBJECT] == 1.0
+        valid_gt_nbs = trajs_mask.sum(dim=1) # [B]
+        
         losses = {}
 
         B, N, M = gt_trajs.shape[0], gt_trajs.shape[1], outputs[0].shape[1]

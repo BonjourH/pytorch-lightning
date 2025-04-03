@@ -36,6 +36,9 @@ class FPNImageFeatureExtractor(nn.Module):
         neck_config = neck.copy()
         neck_config['in_channels'] = self.backbone.out_channels
         self.neck = NECKS.build(neck_config)
+
+    def out_channels(self):
+        return self.neck.out_channels
         
     def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
         """Forward pass to extract features from input images.

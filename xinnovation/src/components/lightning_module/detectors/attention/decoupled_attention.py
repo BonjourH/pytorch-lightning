@@ -3,6 +3,7 @@ import torch.nn as nn
 from xinnovation.src.core.registry import ATTENTION, NORM_LAYERS
 from typing import Optional, Dict
 from xinnovation.src.core import build_from_cfg
+
 __all__ = ["DecoupledMultiHeadAttention"]
 
 
@@ -15,8 +16,28 @@ class DecoupledMultiHeadAttention(nn.Module):
         super().__init__()
         self.value_linear = nn.Linear(query_dim, query_dim * 2, bias=False)
         self.query_linear = nn.Linear(query_dim * 2, query_dim, bias=False)
-        self.attn = nn.MultiheadAttention(query_dim, num_heads, batch_first=True, dropout=dropout)
+        self.attn = nn.MultiheadAttention(query_dim * 2, num_heads, batch_first=True, dropout=dropout)
         self.post_norm = build_from_cfg(post_norm, NORM_LAYERS)
+        
+        
+    def init_weights(self):
+        # 使用Xavier/Glorot初始化线性层
+        nn.init.xavier_normal_(self.value_linear.weight.data)
+        nn.init.xavier_normal_(self.query_linear.weight.data)
+        
+        # 注意力机制的投影权重初始化
+        nn.init.xavier_normal_(self.attn.in_proj_weight.data)
+        nn.init.xavier_normal_(self.attn.out_proj.weight.data)
+        
+        # 如果有偏置项，对其进行初始化（假设注意力机制有偏置）
+        if hasattr(self.attn, 'in_proj_bias') and self.attn.in_proj_bias is not None:
+            nn.init.zeros_(self.attn.in_proj_bias)
+        if hasattr(self.attn, 'out_proj') and hasattr(self.attn.out_proj, 'bias') and self.attn.out_proj.bias is not None:
+            nn.init.zeros_(self.attn.out_proj.bias)
+        
+        # 对归一化层使用更适合的初始化方法
+        if self.post_norm is not None:
+            self.post_norm.init_weights()
 
     def forward(self, tgt: torch.Tensor, 
                 pos_tgt: torch.Tensor, 

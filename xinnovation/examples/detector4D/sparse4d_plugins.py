@@ -32,6 +32,7 @@ class AnchorEncoder(nn.Module):
 
         self.anchor_generator = ANCHOR_GENERATOR.build(anchor_generator_config)
         self._generate_init_trajs()
+        self.num_queries = self.anchor_generator.get_anchor_num()
 
         def create_embedding_layer(input_dim: int, output_dim: int):
             return nn.Sequential(
@@ -49,6 +50,13 @@ class AnchorEncoder(nn.Module):
         self.velocity_embed_layer = create_embedding_layer(2, vel_embed_dim)
         self.fusion_layer = create_embedding_layer(self.embed_dim, self.embed_dim)
         
+        self.init_weights()
+        
+    def init_weights(self):
+        for p in self.parameters():
+            if p.dim() > 1:
+                nn.init.xavier_normal_(p)
+                # nn.init.kaiming_normal_(p)
 
     def _generate_init_trajs(self) -> torch.Tensor:
         self.anchors = self.anchor_generator.get_anchors() # [N, 6] x, y, z, length, width, height
@@ -59,10 +67,11 @@ class AnchorEncoder(nn.Module):
         self.init_trajs[:, TrajParamIndex.X:TrajParamIndex.Z + 1] = self.anchors[:, :3]
         self.init_trajs[:, TrajParamIndex.LENGTH:TrajParamIndex.HEIGHT + 1] = self.anchors[:, 3:6]
         self.init_trajs[:, TrajParamIndex.X] += 4.5 # front bumper to imu
+        self.init_trajs = self.init_trajs.unsqueeze(0)
         return self.init_trajs
     
     def get_init_trajs(self, speed: float = 23.0) -> torch.Tensor:
-        self.init_trajs[:, TrajParamIndex.VX] = speed
+        self.init_trajs[:, :, TrajParamIndex.VX] = speed
         return self.init_trajs
     
     def forward(self, trajs: torch.Tensor) -> torch.Tensor:
@@ -73,6 +82,7 @@ class AnchorEncoder(nn.Module):
         Returns:
             Tensor[B, N, embed_dim]
         """
+        assert trajs.dim() == 3, f"trajs.dim() {trajs.dim()} != 3"
         position_embed = self.position_embed_layer(trajs[:, :, TrajParamIndex.X:TrajParamIndex.Z + 1])
         dimension_embed = self.dimension_embed_layer(trajs[:, :, TrajParamIndex.LENGTH:TrajParamIndex.HEIGHT + 1])
         orientation_embed = self.orientation_embed_layer(trajs[:, :, TrajParamIndex.COS_YAW:TrajParamIndex.SIN_YAW + 1])
@@ -129,32 +139,15 @@ class TrajectoryRefiner(nn.Module):
                 *linear_relu_ln(hidden_dim, 1, 2, query_dim),
                 nn.Linear(hidden_dim, 2),
             )
-        self._init_weight()
+            
+        self.init_weights()
         
-    def _init_weight(self):
+    def init_weights(self):
         """Initialize the weights of the network."""
-        # Initialize regression layers
-        for m in self.reg_layers.modules():
-            if isinstance(m, nn.Linear):
-                nn.init.normal_(m.weight, mean=0.0, std=0.01)
-                if m.bias is not None:
-                    nn.init.constant_(m.bias, 0)
-
-        # Initialize classification layers
-        for m in self.cls_layers.modules():
-            if isinstance(m, nn.Linear):
-                nn.init.normal_(m.weight, mean=0.0, std=0.01)
-                if m.bias is not None:
-                    bias_init = bias_init_with_prob(0.01)
-                    nn.init.constant_(m.bias, bias_init)
-
-        # Initialize quality estimation layers if enabled
-        if self.with_quality_estimation:
-            for m in self.quality_layers.modules():
-                if isinstance(m, nn.Linear):
-                    nn.init.normal_(m.weight, mean=0.0, std=0.01)
-                    if m.bias is not None:
-                        nn.init.constant_(m.bias, 0)
+        for p in self.reg_layers.parameters():
+            if p.dim() > 1:
+                nn.init.xavier_normal_(p)
+                # nn.init.kaiming_normal_(p)
 
     def forward(self, content_query: torch.Tensor, 
                       pos_query: torch.Tensor,

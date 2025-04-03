@@ -5,6 +5,7 @@ from xinnovation.src.core import SourceCameraId, DETECTORS, ATTENTION, ANCHOR_GE
 from xinnovation.src.components.lightning_module.detectors import FPNImageFeatureExtractor, Anchor3DGenerator, DecoupledMultiHeadAttention
 from .mts_feature_aggregator import MultiviewTemporalSpatialFeatureAggregator
 from .sparse4d_plugins import AnchorEncoder, TrajectoryRefiner
+from xinnovation.src.utils.debug_utils import check_nan_or_inf
 
 __all__ = ["Sparse4DDetector"]
 
@@ -28,12 +29,15 @@ class Sparse4DDetector(nn.Module):
         
         self.anchor_encoder = PLUGINS.build(anchor_encoder)
         self.register_buffer("init_trajs", self.anchor_encoder.get_init_trajs(speed=23.0))
+        self.num_queries = self.anchor_encoder.num_queries
+        self.query_dim = self.anchor_encoder.embed_dim
         
         # Create feature extractors for each camera group
         self.feature_extractors = nn.ModuleDict({
             name: IMAGE_FEATURE_EXTRACTOR.build(cfg)
             for name, cfg in feature_extractors.items()
         })
+        # Don't init the FE weights here as we use pretrained weights
         
         # build decoder layers
         self.mts_feature_aggregator = build_from_cfg(mts_feature_aggregator, ATTENTION)
@@ -46,21 +50,26 @@ class Sparse4DDetector(nn.Module):
         }
 
         self.decoder_layers = nn.ModuleList()
-        for idx, layer_ops in enumerate(decoder_op_orders):
+        for layer_ops in decoder_op_orders:
             layer = nn.ModuleList()
-            if idx == 0:
-                mts_idx = layer_ops.index("mts_feature_aggregator")
-                layer_ops = layer_ops[mts_idx:] # start from mts_feature_aggregator
             for op in layer_ops:
                 if op == "mts_feature_aggregator":
                     layer.append(self.mts_feature_aggregator)
                     # use the shared mts_feature_aggregator for all layers
                 else:
                     cfg, registry = self.decoder_layer_config_map[op]
-                    if cfg is None:
-                        continue
                     layer.append(build_from_cfg(cfg, registry))
             self.decoder_layers.append(layer)
+            
+        # Initialize weights
+        self.init_weights()
+
+    def init_weights(self):
+        # Initialize weights for decoder layers
+        for layer in self.decoder_layers:
+            for op in layer:
+                if isinstance(op, nn.Module):
+                    op.init_weights()
     
     def _extract_features(self, group_name: str, imgs: torch.Tensor) -> List[torch.Tensor]:
         """
@@ -76,8 +85,8 @@ class Sparse4DDetector(nn.Module):
         B, T, N_cams, C, H, W = imgs.shape
         imgs = imgs.view(B * T * N_cams, C, H, W)
         extractor = self.feature_extractors[group_name]
-        feats = extractor(imgs)
-        feats = [feat.view(B, T, N_cams, extractor.out_channel, H // ds, W // ds) for feat, ds in zip(feats, extractor.fpn_downsample_scales)]
+        feats, down_scales = extractor(imgs)
+        feats = [feat.view(B, T, N_cams, extractor.out_channels(), H // ds, W // ds) for feat, ds in zip(feats, down_scales)]
         return feats
     
     def forward(self, batch: Dict) -> List[Dict[str, torch.Tensor]]:
@@ -94,30 +103,42 @@ class Sparse4DDetector(nn.Module):
             List[torch.Tensor], trajs at each layer
             List[torch.Tensor], quality at each layer
         """
+
+        check_abnormal = True
         
         # Extract features from each camera
         all_features_dict: Dict[SourceCameraId, List[torch.Tensor]] = {}  
         for group_name, imgs in batch['images'].items():
             B, T, N_cams = imgs.shape[:3]
+            imgs = imgs.view(B * T * N_cams, *imgs.shape[3:])
+
+            extractor = self.feature_extractors[group_name]
             if self.use_checkpoint:
-                feats = torch.utils.checkpoint.checkpoint(self._extract_features, group_name, imgs, use_reentrant=False)
+                feats, down_scales = torch.utils.checkpoint.checkpoint(extractor, imgs, use_reentrant=False)
             else:
-                feats = self._extract_features(group_name, imgs) 
+                feats, down_scales = extractor(imgs)
                 # feats: List[Tensor[B*T*N_cams, C, H // down_scale_i, W // down_scale_i]]
-            for i in range(len(feats)):
-                C_i, H_i, W_i = feats[i].shape[2:]
-                feats[i] = feats[i].view(B * T, N_cams, C_i, H_i, W_i)
+            check_nan_or_inf(feats, active=check_abnormal, name="feats")
+            for idx in range(len(feats)):
+                C_i, H_i, W_i = feats[idx].shape[1:]
+                feats[idx] = feats[idx].view(B * T, N_cams, C_i, H_i, W_i)
+
             for idx, camera_id in enumerate(self.camera_groups[group_name]):
-                all_features_dict[camera_id] = [feat[:, :, idx] for feat in feats] # (B * T, C, H // down_scale_i, W // down_scale_i)
+                all_features_dict[camera_id] = [feat[:, idx] for feat in feats] # (B * T, C, H // down_scale_i, W // down_scale_i)
         
         # Decoder part
+        
         trajs_prediction = []
+        trajs_prediction_ct = [] # cross-attention branch of DAC-DETR
         quality_prediction = []
 
-        tgts = torch.zeros(B, self.num_queries, self.query_dim)
+        trajs = self.init_trajs.repeat(B, 1, 1)
+        check_nan_or_inf(trajs, active=check_abnormal, name="trajs")
+
+        tgts = torch.zeros(B, self.anchor_encoder.num_queries, self.query_dim)
         tgts = tgts.to(self.init_trajs.device)
-        pos_embeds = self.anchor_encoder(self.init_trajs).unsqueeze(0).repeat(B, 1, 1)
-        
+        pos_embeds = self.anchor_encoder(trajs)
+        check_nan_or_inf(pos_embeds, active=check_abnormal, name="pos_embeds")
         for layer_idx in range(len(self.decoder_op_orders)):
             layer_ops = self.decoder_op_orders[layer_idx]
             layers = self.decoder_layers[layer_idx]
@@ -125,22 +146,27 @@ class Sparse4DDetector(nn.Module):
             for op_idx in range(len(layer_ops)):
                 op, layer = layer_ops[op_idx], layers[op_idx]
                 if op == "mts_feature_aggregator":
-                    all_features_dict = self.mts_feature_aggregator(trajs, 
-                                                                    batch['camera_ids'], 
-                                                                    tgts, 
-                                                                    all_features_dict, 
-                                                                    batch['calibrations'], 
-                                                                    batch['ego_states'], 
-                                                                    pos_embeds)
+                    pixels, tgts = self.mts_feature_aggregator(trajs, 
+                                                       batch['camera_ids'], 
+                                                       tgts, 
+                                                       all_features_dict, 
+                                                       batch['calibrations'], 
+                                                       batch['ego_states'], 
+                                                       pos_embeds)
+                    check_nan_or_inf(pixels, active=check_abnormal, name="pixels")
                 elif op == "temp_attention":
                     raise NotImplementedError("Temp attention is not implemented")
                     # tgt = layer(tgts, pos_embeds, histories_tgts, histories_pos_embeds)
                 elif op == "self_attention":
                     tgts = layer(tgts, pos_embeds)
+                    check_nan_or_inf(tgts, active=check_abnormal, name="tgts")
                 elif op == "ffn":
                     tgts = layer(tgts)
+                    check_nan_or_inf(tgts, active=check_abnormal, name="tgts")
                 elif op == "refine":
                     trajs, quality = layer(tgts, pos_embeds, trajs)
+                    check_nan_or_inf(trajs, active=check_abnormal, name="trajs")
+                    assert trajs is not None
                     trajs_prediction.append(trajs)
                     quality_prediction.append(quality)
             # order: temp_attn => self_attn => mts_feature_aggregator => ffn => refine
@@ -149,4 +175,4 @@ class Sparse4DDetector(nn.Module):
         del all_features_dict
         torch.cuda.empty_cache()
         
-        return trajs_prediction, quality_prediction
+        return trajs_prediction, trajs_prediction_ct, quality_prediction

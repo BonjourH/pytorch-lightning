@@ -39,14 +39,15 @@ class MultiviewTemporalSpatialFeatureAggregator(nn.Module):
         self.query_dim = query_dim
         self.learnable_points_range = learnable_points_range
         self.residual_mode = residual_mode
+        self.sequence_length = sequence_length
         
         # Keypoints configuration
-        self.register_buffer('unit_points', generate_bbox_corners_points())
+        self.register_buffer('unit_points', generate_bbox_corners_points(with_origin=True)) # [3, 9]
         if num_learnable_points > 0 :
-            self.learnable_points = nn.ModuleList([
+            self.learnable_points = nn.Sequential(
                 nn.Linear(query_dim, num_learnable_points * 3),
                 nn.Tanh()
-            ])
+            )
         
         # Keypoints weight
         temporal_weights = torch.exp(-torch.linspace(0, 1, sequence_length) * temporal_weight_decay).flip(0)
@@ -56,13 +57,18 @@ class MultiviewTemporalSpatialFeatureAggregator(nn.Module):
         self.fpn_levels = fpn_levels
         self.kpt_num = self.unit_points.shape[-1] + num_learnable_points
         self.weight_channel =  self.kpt_num * camera_nb * fpn_levels
-        self.feature_weights = nn.ModuleList([nn.Linear(query_dim, self.weight_channel), nn.Sigmoid()])
+        self.feature_weights = nn.Sequential(
+            nn.Linear(query_dim, self.weight_channel), 
+            nn.Sigmoid()
+        )
         
-        # init weights
+        self.init_weights()
+                
+    def init_weights(self):
         for p in self.parameters():
             if p.dim() > 1:
-                # nn.init.xavier_normal_(p)
-                nn.init.kaiming_normal_(p)
+                nn.init.xavier_normal_(p)
+                # nn.init.kaiming_normal_(p)
 
     def _with_pos_embed(self, tensor, pos):
         return tensor if pos is None else tensor + pos
@@ -110,11 +116,12 @@ class MultiviewTemporalSpatialFeatureAggregator(nn.Module):
                              pos_queries: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
         """Calculate the projected pixels and behind camera mask.
         """
+        B, N, _ = content_queries.shape
         # 1. Concat the learnable points with the unit points
         if self.num_learnable_points > 0:
             learnable_points = self._generate_learnable_points(content_queries, pos_queries) # [B, N, 3, num_learnable_points]
-            unit_points = self.unit_points.repeat(trajs.shape[0], 1, 1) # [B, 3, 9]
-            kpts_all = torch.cat([unit_points, learnable_points], dim=2) # [B, N, 3, P = 9 + num_learnable_points]
+            unit_points = self.unit_points.unsqueeze(0).unsqueeze(0).repeat(B, N, 1, 1) # [B, N, 3, 9]
+            kpts_all = torch.cat([unit_points, learnable_points], dim=3) # [B, N, 3, P = 9 + num_learnable_points]
         else:
             kpts_all = self.unit_points # [3, 9]
 
@@ -144,7 +151,7 @@ class MultiviewTemporalSpatialFeatureAggregator(nn.Module):
             pixels: Tensor[B * T, N, N_cams, P, 2]
             new_content_queries: Tensor[B, N, query_dim]
         """
-        B, N, T = trajs.shape
+        B, N, _ = trajs.shape
         L, P, N_cams = self.fpn_levels, self.kpt_num, self.camera_nb
         # 1. Project the points to the image plane
         pixels = self.cal_projected_pixels(trajs, calibrations, ego_states, content_queries, pos_queries)
@@ -153,7 +160,7 @@ class MultiviewTemporalSpatialFeatureAggregator(nn.Module):
         # 2. Generate the weights for fusing features
         weights = self._generate_kpts_feature_weight(trajs, content_queries, pos_queries)
         # weights: Tensor[B * T, N, N_cams, P, L]
-        invalid_mask = (pixels[..., 0] < 0.0).unsqueeze(-1) # [B * T, N, N_cams, P, 1]
+        invalid_mask = (pixels[..., 0] < 0.0) # [B * T, N, N_cams, P]
         weights[invalid_mask] = 0.0
         
         # 3. Sample the features
@@ -174,8 +181,8 @@ class MultiviewTemporalSpatialFeatureAggregator(nn.Module):
             features_list.append(stacked_sampled_features) # List[Tensor[B * T, C, N, P, L]]
             
         features = torch.stack(features_list, dim=3) # [B * T, C, N, N_cams, P, L]
-        features = features.view(B, T, self.query_dim, N, N_cams, P, L)
-        weights = weights.view(B, T, 1, N, N_cams, P, L)
+        features = features.view(B, self.sequence_length, self.query_dim, N, N_cams, P, L)
+        weights = weights.view(B, self.sequence_length, 1, N, N_cams, P, L)
         
         # TODO: add dropout for weights: for example drop several temporal frames or some kpts
         weighted_features = features * weights
