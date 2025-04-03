@@ -50,6 +50,13 @@ class FPN(nn.Module):
                     nn.Conv2d(out_channels, out_channels, 3, stride=2, padding=1)
                 )
                 
+        self.init_weights()
+
+    def init_weights(self):
+        for p in self.parameters():
+            if p.dim() > 1:
+                nn.init.kaiming_normal_(p, nonlinearity='relu')
+                
     def forward(self, inputs):
         """Forward pass.
         

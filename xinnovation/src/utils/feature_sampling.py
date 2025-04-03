@@ -4,13 +4,17 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.parallel import parallel_apply
+from xinnovation.src.utils.debug_utils import check_nan_or_inf
+
+check_abnormal = True
 
 
 def grid_sample_fpn_features(fpn_features: List[torch.Tensor], 
                              pixels: torch.Tensor,
                              mode: str = 'bilinear',
                              padding_mode: str = 'zeros',
-                             align_corners: bool = True) -> List[torch.Tensor]:
+                             align_corners: bool = True,
+                             dim: int = -1) -> torch.Tensor:
     """
     从多层FPN特征中采样像素对应的特征
     
@@ -28,7 +32,7 @@ def grid_sample_fpn_features(fpn_features: List[torch.Tensor],
     sampled_features = []
     
     # 对每个FPN层级进行采样
-    for features in fpn_features:
+    for i, features in enumerate(fpn_features):
         
         # 使用grid_sample采样特征
         # features: [B, C, H, W], grid: [B, H_out, W_out, 2] -> sampled: [B, C, H_out, W_out]
@@ -39,10 +43,11 @@ def grid_sample_fpn_features(fpn_features: List[torch.Tensor],
             padding_mode=padding_mode, 
             align_corners=align_corners
         )
+        check_nan_or_inf(sampled, active=check_abnormal, name=f"sampled_{i}")
         
         sampled_features.append(sampled)
         
-    return torch.stack(sampled_features, dim=1)
+    return torch.stack(sampled_features, dim=dim)
 
 
 def grid_sample_fpn_features_parallel_apply(fpn_features: List[torch.Tensor], 

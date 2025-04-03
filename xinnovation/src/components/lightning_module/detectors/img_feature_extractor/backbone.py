@@ -24,6 +24,8 @@ class ImageFeatureExtractor(nn.Module):
             scales_to_drop: List[int], if the scale is in the list, its corresponding feature will be dropped
             use_pretrained: bool, whether to use pretrained backbone
         """
+
+        self.use_pretrained = use_pretrained
         
         # Supported backbones dictionary with output channels at each stage
         self.supported_backbones = {
@@ -165,12 +167,12 @@ class ImageFeatureExtractor(nn.Module):
                 pretrained=use_pretrained,
                 features_only=True
             )
-            
-        if not use_pretrained:
-            self._init_weights()
-    
-    def _init_weights(self):
+        
+        self.init_weights()
+    def init_weights(self):
         """Initialize network weights."""
+        if self.use_pretrained:
+            return
         for p in self.parameters():
             if p.dim() > 1:
                 nn.init.kaiming_normal_(p, nonlinearity='relu')

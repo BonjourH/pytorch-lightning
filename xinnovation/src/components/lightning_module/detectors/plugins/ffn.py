@@ -2,6 +2,7 @@ from xinnovation.src.core import FEEDFORWARD_NETWORK, ACTIVATION, DROPOUT, NORM_
 import torch
 import torch.nn as nn
 from torch.nn import Sequential, Linear
+from xinnovation.src.utils.debug_utils import check_nan_or_inf
 
 __all__ = ["AsymmetricFFN"]
 
@@ -101,12 +102,16 @@ class AsymmetricFFN(nn.Module):
         
 
     def forward(self, x):
+        check_abnormal = True
+        check_nan_or_inf(x, active=check_abnormal, name="before pre_norm")
         if self.pre_norm is not None:
             x = self.pre_norm(x)
+        check_nan_or_inf(x, active=check_abnormal, name="after pre_norm")
         out = self.layers(x) # inchannels -> feedforward_channels -> embed_dims
         out = self.dropout_layer(out)
         if self.add_identity:
             out = self.identity_fc(x) + out
         if self.post_norm is not None:
             out = self.post_norm(out)
+            check_nan_or_inf(out, active=check_abnormal, name="after post_norm")
         return out

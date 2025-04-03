@@ -31,13 +31,16 @@ class Sparse4DDetector(nn.Module):
         self.register_buffer("init_trajs", self.anchor_encoder.get_init_trajs(speed=23.0))
         self.num_queries = self.anchor_encoder.num_queries
         self.query_dim = self.anchor_encoder.embed_dim
+        self.query_embed = nn.Parameter(
+                torch.zeros([self.anchor_encoder.num_queries, self.query_dim]),
+                requires_grad=True,
+        )
         
         # Create feature extractors for each camera group
         self.feature_extractors = nn.ModuleDict({
             name: IMAGE_FEATURE_EXTRACTOR.build(cfg)
             for name, cfg in feature_extractors.items()
         })
-        # Don't init the FE weights here as we use pretrained weights
         
         # build decoder layers
         self.mts_feature_aggregator = build_from_cfg(mts_feature_aggregator, ATTENTION)
@@ -65,6 +68,14 @@ class Sparse4DDetector(nn.Module):
         self.init_weights()
 
     def init_weights(self):
+        # Initialize weights for anchor encoder
+        self.anchor_encoder.init_weights()
+        # Initialize weights for query embed
+        if self.query_embed.requires_grad:
+            nn.init.xavier_uniform_(self.query_embed.data, gain=1)
+        # Initialize weights for feature extractors
+        for extractor in self.feature_extractors.values():
+            extractor.init_weights()
         # Initialize weights for decoder layers
         for layer in self.decoder_layers:
             for op in layer:
@@ -135,8 +146,7 @@ class Sparse4DDetector(nn.Module):
         trajs = self.init_trajs.repeat(B, 1, 1)
         check_nan_or_inf(trajs, active=check_abnormal, name="trajs")
 
-        tgts = torch.zeros(B, self.anchor_encoder.num_queries, self.query_dim)
-        tgts = tgts.to(self.init_trajs.device)
+        tgts = self.query_embed.repeat(B, 1, 1)
         pos_embeds = self.anchor_encoder(trajs)
         check_nan_or_inf(pos_embeds, active=check_abnormal, name="pos_embeds")
         for layer_idx in range(len(self.decoder_op_orders)):
@@ -154,6 +164,7 @@ class Sparse4DDetector(nn.Module):
                                                        batch['ego_states'], 
                                                        pos_embeds)
                     check_nan_or_inf(pixels, active=check_abnormal, name="pixels")
+                    check_nan_or_inf(tgts, active=check_abnormal, name="tgts")
                 elif op == "temp_attention":
                     raise NotImplementedError("Temp attention is not implemented")
                     # tgt = layer(tgts, pos_embeds, histories_tgts, histories_pos_embeds)

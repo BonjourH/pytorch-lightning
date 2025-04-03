@@ -37,6 +37,13 @@ class FPNImageFeatureExtractor(nn.Module):
         neck_config['in_channels'] = self.backbone.out_channels
         self.neck = NECKS.build(neck_config)
 
+        # Initialize weights
+        self.init_weights()
+
+    def init_weights(self):
+        self.backbone.init_weights()
+        self.neck.init_weights()
+
     def out_channels(self):
         return self.neck.out_channels
         

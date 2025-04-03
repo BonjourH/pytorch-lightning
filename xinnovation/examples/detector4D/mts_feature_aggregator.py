@@ -5,7 +5,8 @@ from typing import List, Tuple, Optional, Dict
 from xinnovation.src.core import SourceCameraId, TrajParamIndex, CameraParamIndex, EgoStateIndex
 from xinnovation.src.core.registry import ATTENTION
 from xinnovation.src.utils import generate_bbox_corners_points, project_points_to_image
-from xinnovation.src.utils.feature_sampling import grid_sample_fpn_features_parallel_apply
+from xinnovation.src.utils.feature_sampling import grid_sample_fpn_features_parallel_apply, grid_sample_fpn_features
+from xinnovation.src.utils.debug_utils import check_nan_or_inf
 
 __all__ = ["MultiviewTemporalSpatialFeatureAggregator"]
 
@@ -165,6 +166,8 @@ class MultiviewTemporalSpatialFeatureAggregator(nn.Module):
         
         # 3. Sample the features
         features_list = []
+
+        check_abnormal = True
         
         for ic in range(N_cams):
             camera_id = camera_ids[ic]
@@ -172,24 +175,32 @@ class MultiviewTemporalSpatialFeatureAggregator(nn.Module):
             fpn_features = features_dict[camera_id] # List[Tensor[B*T, C, H_i, W_i]] of different scales
             assert len(fpn_features) == L, f"The number of FPN levels must be equal to the number of feature scales, but got {len(fpn_features)} and {L}"
             pixels_ic = pixels[:, :, ic, :, :] # [B * T, N, P, 2]
-            stacked_sampled_features = grid_sample_fpn_features_parallel_apply(fpn_features, 
+            check_nan_or_inf(pixels_ic, active=check_abnormal, name=f"pixels_ic_{ic}")
+            check_nan_or_inf(fpn_features, active=check_abnormal, name=f"fpn_features_{ic}")
+            stacked_sampled_features = grid_sample_fpn_features(fpn_features, 
                                                                                pixels_ic,
                                                                                mode='bilinear',
                                                                                padding_mode='zeros',
                                                                                align_corners=True,
                                                                                dim=-1) 
+            check_nan_or_inf(stacked_sampled_features, active=check_abnormal, name=f"stacked_sampled_features_{ic}")
             features_list.append(stacked_sampled_features) # List[Tensor[B * T, C, N, P, L]]
             
         features = torch.stack(features_list, dim=3) # [B * T, C, N, N_cams, P, L]
         features = features.view(B, self.sequence_length, self.query_dim, N, N_cams, P, L)
         weights = weights.view(B, self.sequence_length, 1, N, N_cams, P, L)
+        check_nan_or_inf(features, active=check_abnormal, name="features")
+        check_nan_or_inf(weights, active=check_abnormal, name="weights")
         
         # TODO: add dropout for weights: for example drop several temporal frames or some kpts
         weighted_features = features * weights
         weighted_features = weighted_features.sum(dim=(1, 4, 5, 6)) # [B, query_dim, N]
         weights_sum = weights.sum(dim=(1, 4, 5, 6)) # [B, 1, N]
         weights_sum = weights_sum.clamp(min=1e-6)
+        check_nan_or_inf(weights_sum, active=check_abnormal, name="weights_sum")
+        check_nan_or_inf(weighted_features, active=check_abnormal, name="weighted_features")
         weighted_features = weighted_features / weights_sum # [B, query_dim, N]
+        check_nan_or_inf(weighted_features, active=check_abnormal, name="normalized_weighted_features")
         new_content_queries = weighted_features.permute(0, 2, 1) # [B, N, query_dim]
 
         if self.residual_mode == "cat":
