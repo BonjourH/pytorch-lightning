@@ -25,11 +25,13 @@ class Sparse4DModule(LightningDetector):
     def __init__(self, detector: Dict, loss: Dict, optimizer: Dict, scheduler: Dict, **kwargs):
         super().__init__(detector=detector, loss=loss, optimizer=optimizer, scheduler=scheduler, **kwargs)
 
+        assert "debug_config" in kwargs, "debug_config is required"
+        self.debug_config = kwargs["debug_config"]
         self.predictions = []
         
         # for visualization
-        # if self.config.logging.visualize_intermediate_results:
-        #     self.register_buffer("bbox_edge_points", sample_bbox_edge_points(1000))
+        if self.debug_config.visualize_intermediate_results:
+            self.register_buffer("bbox_edge_points", sample_bbox_edge_points(50))
         
     def forward(self, batch) -> List[Dict]:
         return self.detector(batch)
@@ -53,20 +55,22 @@ class Sparse4DModule(LightningDetector):
         Args:
             trajs: [B, N, TrajParamIndex.END_OF_INDEX]
             camera_ids: List[SourceCameraId]
-            calibrations: torch.Tensor[B, Ncams, CameraParamIndex.END_OF_INDEX]
-            ego_states: torch.Tensor[B, EgoStateParamIndex.END_OF_INDEX]
+            calibrations: torch.Tensor[B, C, CameraParamIndex.END_OF_INDEX]
+            ego_states: torch.Tensor[B, T, EgoStateParamIndex.END_OF_INDEX]
             imgs_dict: Dict[SourceCameraId, torch.Tensor[B, T, 3, H, W]]
         Returns:
             imgs_dict: Dict[SourceCameraId, torch.Tensor[B, T, 3, H, W]]
             concat_imgs: Dict[SourceCameraId, np.ndarray]
         """
+        B, T, _ = ego_states.shape
         
-        pixels = project_points_to_image(trajs, calibrations, ego_states, self.bbox_edge_points)
-        B, C, N, T, P, _ = pixels.shape # [B, C, N, T, P, 2]
+        pixels = project_points_to_image(trajs, calibrations, ego_states, self.bbox_edge_points) # pixels: torch.Tensor[B*T, N, C, P, 2]
+        _, N, C, P, _ = pixels.shape
+        pixels = pixels.view(B, T, N, C, P, 2)
         
         # disable pixels of false positive trajectories
         traj_fp_mask = trajs[..., TrajParamIndex.HAS_OBJECT] < 0.5 # [B, N]
-        traj_fp_mask = traj_fp_mask.unsqueeze(1).unsqueeze(3).unsqueeze(4).expand(-1, C, -1, T, P)
+        traj_fp_mask = traj_fp_mask.unsqueeze(1).unsqueeze(3).unsqueeze(4).expand(-1, T, -1, C, P)
         pixels[traj_fp_mask, :] = -1
 
         concat_imgs: Dict[SourceCameraId, np.ndarray] = {}
@@ -76,10 +80,10 @@ class Sparse4DModule(LightningDetector):
         for cam_idx, camera_id in enumerate(camera_ids):
             img_sequence = imgs_dict[camera_id] # [B, T, H, W, 3]
             H, W = img_sequence.shape[2:4]
-            
-            tmp_pixel = pixels[:, cam_idx, ...] # [B, N, T, P, 2]
-            tmp_pixel = tmp_pixel.permute(0, 2, 1, 3, 4) # [B, T, N, P, 2]
+
+            tmp_pixel = pixels[:, :, :, cam_idx, ...] # [B, T, N, P, 2]
             tmp_pixel = tmp_pixel.reshape(B, T, N * P, 2) # [B, T, N * P, 2]
+
             tmp_pixel[:, :, :, 0] *= W
             tmp_pixel[:, :, :, 1] *= H
             tmp_invalid_mask = torch.logical_or(
@@ -96,7 +100,7 @@ class Sparse4DModule(LightningDetector):
             # 利用PyTorch的高级索引功能，通过向量化操作快速修改像素
             batch_indices = torch.arange(B, device=self.device)[:, None, None].expand(-1, T, N*P)
             time_indices = torch.arange(T, device=self.device)[None, :, None].expand(B, -1, N*P)
-            r = (self.config.logging.point_radius + 1) // 2
+            r = (self.debug_config.point_radius + 1) // 2
             r = max(r, 1)
             for i in range(-r, r):
                 h_indices = h_coords + i
@@ -146,7 +150,7 @@ class Sparse4DModule(LightningDetector):
                                                     color=torch.tensor([0.0, 255.0, 0.0]))
         
         # 3. save images
-        save_dir = os.path.join(self.config.logging.visualize_intermediate_results_dir, 'init')
+        save_dir = os.path.join(self.debug_config.visualize_intermediate_results_dir, 'init')
         os.makedirs(save_dir, exist_ok=True)
         for camera_id in imgs_dict.keys():
             cv2.imwrite(os.path.join(save_dir, f'init_{camera_id}.png'), concat_imgs[camera_id])
@@ -166,7 +170,7 @@ class Sparse4DModule(LightningDetector):
                                                     color=torch.tensor([0.0, 255.0, 0.0]))
        
         # 3. save images
-        save_dir = os.path.join(self.config.logging.visualize_intermediate_results_dir, 'gt')
+        save_dir = os.path.join(self.debug_config.visualize_intermediate_results_dir, 'gt')
         os.makedirs(save_dir, exist_ok=True)
         for camera_id in imgs_dict.keys():
             cv2.imwrite(os.path.join(save_dir, f'gt_{camera_id}.png'), concat_imgs[camera_id])
@@ -182,9 +186,9 @@ class Sparse4DModule(LightningDetector):
         self.criterion.reset_matching_history()
         
         # save config file
-        config_path = os.path.join(self.config.logging.log_dir, "train_config.json")
+        config_path = os.path.join(self.debug_config.log_dir, "train_config.json")
         with open(config_path, 'w') as f:
-            json.dump(self.config, f, indent=2)
+            json.dump(self.hparams, f, indent=2)
             
     def on_train_end(self):
         """On train end, visualize the matching history."""
@@ -198,7 +202,7 @@ class Sparse4DModule(LightningDetector):
             return
         
         # 创建保存可视化结果的目录
-        vis_dir = os.path.join(self.config.logging.log_dir, "matching_visualization")
+        vis_dir = os.path.join(self.debug_config.log_dir, "matching_visualization")
         os.makedirs(vis_dir, exist_ok=True)
         
         # matching_history的结构是 Dict[int, List[Tuple[int, int]]]
@@ -294,35 +298,38 @@ class Sparse4DModule(LightningDetector):
         for name, value in loss_dict.items():
             self.log(f"train/{name}", value, on_step=True, on_epoch=True, prog_bar=True)
             
-        if self.config.logging.visualize_intermediate_results:
+        if self.debug_config.visualize_intermediate_results:
             print(f'Begin to visualize gt and pred trajs for training step {batch_idx}')
             # 1. read images
             imgs_dict = TrainingSample.read_seqeuntial_images_to_tensor(batch['image_paths'], self.device)
             # 2. render gt trajs
-            imgs_dict, concat_imgs = self._render_trajs_on_imgs(batch['trajs'], 
-                                                    batch['camera_ids'],
-                                                    batch['calibrations'],
-                                                    batch['ego_states'], 
-                                                    imgs_dict,
-                                                    color=torch.tensor([0.0, 255.0, 0.0]))
+            if self.debug_config.render_gt_trajs:
+                imgs_dict, concat_imgs = self._render_trajs_on_imgs(batch['trajs'], 
+                                                        batch['camera_ids'],
+                                                        batch['calibrations'],
+                                                        batch['ego_states'], 
+                                                        imgs_dict,
+                                                        color=torch.tensor(self.debug_config.gt_color))
             # 3. visualize init trajs
-            init_trajs = self.net.decoder.init_trajs.expand(batch['ego_states'].shape[0], -1, -1)
-            imgs_dict, concat_imgs = self._render_trajs_on_imgs(init_trajs, 
-                                                    batch['camera_ids'],
-                                                    batch['calibrations'],
-                                                    batch['ego_states'], 
-                                                    imgs_dict,
-                                                    color=torch.tensor([0.0, 255.0, 0.0]))
+            if self.debug_config.render_init_trajs:
+                init_trajs = self.detector.get_init_trajs(batch['ego_states'].shape[0])
+                imgs_dict, concat_imgs = self._render_trajs_on_imgs(init_trajs, 
+                                                        batch['camera_ids'],
+                                                        batch['calibrations'],
+                                                        batch['ego_states'], 
+                                                        imgs_dict,
+                                                        color=torch.tensor(self.debug_config.init_color))
             # 4. visualize pred trajs
-            # imgs_dict, concat_imgs = self._render_trajs_on_imgs(outputs[-1]['trajs'], 
-            #                                         batch['camera_ids'],
-            #                                         batch['calibrations'],
-            #                                         batch['ego_states'], 
-            #                                         imgs_dict,
-            #                                         color=torch.tensor([0.0, 0.0, 255.0]))
+            if self.debug_config.render_pred_trajs:
+                imgs_dict, concat_imgs = self._render_trajs_on_imgs(outputs[-1]['trajs'], 
+                                                        batch['camera_ids'],
+                                                        batch['calibrations'],
+                                                        batch['ego_states'], 
+                                                        imgs_dict,
+                                                        color=torch.tensor(self.debug_config.pred_color))
             
             # 5. save images
-            save_dir = os.path.join(self.config.logging.visualize_intermediate_results_dir)
+            save_dir = os.path.join(self.debug_config.visualize_intermediate_results_dir)
             os.makedirs(save_dir, exist_ok=True)
             for camera_id in concat_imgs.keys():
                 img_name = f'{camera_id.name}_{batch_idx}.png'
@@ -419,10 +426,10 @@ class Sparse4DModule(LightningDetector):
         """On predict start."""
         print("On predict start")
         # save config file
-        os.makedirs(self.config.predict.output_dir, exist_ok=True)
-        config_path = os.path.join(self.config.predict.output_dir, "predict_config.json")
+        os.makedirs(self.debug_config.predict_dir, exist_ok=True)
+        config_path = os.path.join(self.debug_config.predict_dir, "predict_config.json")
         with open(config_path, 'w') as f:
-            json.dump(self.config, f, indent=2)
+            json.dump(self.hparams, f, indent=2)
         
     def on_predict_end(self):
         """On predict end."""

@@ -4,7 +4,6 @@ from xinnovation.examples.detector4D.sparse4d_dataset import CameraGroupConfig
 
 # ============================== 1. Base Config ==============================
 
-
 # ============================== 2. Model Config ==============================
 # ├── LIGHTNING_MODULE
 # │   ├── OPTIMIZERS         # 优化器 (SGD, AdamW, Lion)
@@ -97,7 +96,7 @@ lightning_module = dict(
                 y_interval=3.75,
                 z_value=0.2,
                 anchor_size=(5.0, 2.0, 1.5) # (length, width, height)
-            )
+            ),
         ),
         feature_extractors=dict(
             # Ensure all the feature extractors have the same FPN levels
@@ -174,7 +173,20 @@ lightning_module = dict(
             dropout=dropout,
             post_norm=None
         ) if use_temp_attention else None
-    )
+    ),
+    debug_config = dict(
+        visualize_intermediate_results=True,
+        visualize_intermediate_results_dir="/home/xinjian/Code/pytorch-lightning/visualize_intermediate_results",
+        render_gt_trajs=True,
+        render_init_trajs=False,
+        render_pred_trajs=False,
+        gt_color=[0.0, 255.0, 0.0],
+        init_color=[0.0, 0.0, 255.0],
+        pred_color=[255.0, 0.0, 0.0],
+        point_radius=1,
+        log_dir="/home/xinjian/Code/pytorch-lightning/logs",
+        predict_dir="/home/xinjian/Code/pytorch-lightning/predict",
+    ),
 )
 # ============================== 3. Data Config ==============================
 lightning_data_module = dict(
@@ -231,7 +243,7 @@ lightning_trainer = dict(
     overfit_batches=0.0,
     val_check_interval=1.0,
     check_val_every_n_epoch=3,
-    num_sanity_val_steps=1,
+    num_sanity_val_steps=0, # 0 remove sanity check
     log_every_n_steps=50,
     enable_progress_bar=True,
     gradient_clip_val=None,

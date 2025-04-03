@@ -262,8 +262,7 @@ def project_points_to_image(trajs: torch.Tensor,
         ego_states: torch.Tensor[B, T, EgoStateIndex.END_OF_INDEX]
         unit_points: torch.Tensor[B, N, 3, P] or torch.Tensor[3, P]
     Returns:
-        pixels: torch.Tensor[B, C, N, T, P, 2]
-        invalid_mask: torch.Tensor[B, C, N, T, P]
+        pixels: torch.Tensor[B*T, N, C, P, 2]
     """
     
     # get the transform from local object coordinates to camera frame
@@ -299,8 +298,8 @@ def project_points_to_image(trajs: torch.Tensor,
     # in matrix multiplication, the cam_points is float16, but the calibrations is float32
     # so we need to cast the cam_points to float32
     
-    pixels = camera_to_pixel(cam_points, calibrations, normalize)
-    return pixels
+    # pixels: torch.Tensor[B*T, N, C, P, 2]
+    return camera_to_pixel(cam_points, calibrations, normalize)
 
 if __name__ == "__main__":
     B, N, T, C, P = 32, 128, 10, 7, 128

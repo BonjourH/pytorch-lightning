@@ -20,6 +20,9 @@ class Sparse4DLossWithDAC(nn.Module):
         # store matching history of the first batch of different layers
         self.matching_history: Dict[int, List[Tuple[int, int]]] = {} # layer_idx -> List[(gt_idx, pred_idx)]
     
+    def reset_matching_history(self):
+        self.matching_history = {}
+    
     @torch.no_grad()
     def _compute_hungarian_match_results(self, gt_trajs: torch.Tensor, pred_trajs: torch.Tensor, valid_gt_nbs: torch.Tensor) -> torch.Tensor:
         """

@@ -67,6 +67,9 @@ class Sparse4DDetector(nn.Module):
         # Initialize weights
         self.init_weights()
 
+    def get_init_trajs(self, B: int) -> torch.Tensor:
+        return self.init_trajs.repeat(B, 1, 1)
+
     def init_weights(self):
         # Initialize weights for anchor encoder
         self.anchor_encoder.init_weights()
