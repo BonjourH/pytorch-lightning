@@ -163,26 +163,22 @@ def camera_to_pixel(cam_points: torch.Tensor, calib_params: torch.Tensor, normal
     y_cam = cam_points[..., 1] # [B, C, NTP]
     z_cam = cam_points[..., 2] # [B, C, NTP]
     
-    # Handle division by zero
-    z_cam = torch.where(z_cam == 0, torch.ones_like(z_cam) * 1e-10, z_cam)
     
-    # Normalize coordinates
-    x_normalized = x_cam / z_cam 
-    y_normalized = y_cam / z_cam
-
-    normalized_r_square = x_normalized * x_normalized + y_normalized * y_normalized
-    normalized_r = torch.sqrt(normalized_r_square)
-    normalized_r = torch.where(normalized_r == 0, torch.ones_like(normalized_r) * 1e-10, normalized_r)
-    theta = torch.atan(normalized_r)
-    
-    # calculate fisheye distorted coordinates
+    # 1. calculate fisheye distorted coordinates
+    r_square = x_cam * x_cam + y_cam * y_cam
+    r = torch.sqrt(r_square)
+    theta = torch.atan2(r, z_cam)
+    r = torch.where(r == 0, torch.ones_like(r) * 1e-10, r)
+    cos_alpha = x_cam / r
+    sin_alpha = y_cam / r
     theta2 = theta * theta
     theta4 = theta2 * theta2
     theta6 = theta4 * theta2
     theta8 = theta4 * theta4
     
     distorted_theta = theta * (1 + k1 * theta2 + k2 * theta4 + k3 * theta6 + k4 * theta8)
-    scaling = torch.where(normalized_r > 0, distorted_theta / normalized_r, torch.ones_like(normalized_r))
+    x_distorted_fisheye = distorted_theta * cos_alpha
+    y_distorted_fisheye = distorted_theta * sin_alpha
     
     # calculate the derivation of the distorted radius to filter the folded pixels
     # distorted_theta = theta * (1 + k1 * theta^2 + k2 * theta^4 + k3 * theta^6 + k4 * theta^8)
@@ -190,35 +186,37 @@ def camera_to_pixel(cam_points: torch.Tensor, calib_params: torch.Tensor, normal
     fisheye_derivation = 1 + 3 * k1 * theta2 + 5 * k2 * theta4 + 7 * k3 * theta6 + 9 * k4 * theta8
     folded_fisheye_pixel_mask = (fisheye_derivation < 0)
     
-    x_distorted_fisheye = x_normalized * scaling
-    y_distorted_fisheye = y_normalized * scaling
+
     x_distorted_fisheye[folded_fisheye_pixel_mask] = -1.0 # -1 is the invalid pixel
     y_distorted_fisheye[folded_fisheye_pixel_mask] = -1.0 # -1 is the invalid pixel
     
-    # calculate general distorted coordinates
-    general_r2 = normalized_r_square
-    general_r4 = general_r2 * general_r2
-    general_r6 = general_r4 * general_r2
-    # NOTE: here the rr2, r4, r6 could be infinite if z_cam close to zero, and in this case,
-    # it will generate NaN values in later calculation, so we need to filter them. So a simple
-    # solution is to filter the angle with large theta.
-    max_general_distorted_angle = torch.tensor(70 * np.pi / 180).to(theta.device)
-    invalid_angle_mask = (theta > max_general_distorted_angle) | (theta < -max_general_distorted_angle)
+    #2.  calculate general distorted coordinates
+    # Normalize coordinates
+    z_cam = torch.where(z_cam == 0, torch.ones_like(z_cam) * 1e-5, z_cam)
+    x_normalized = x_cam / z_cam 
+    y_normalized = y_cam / z_cam
+    normalized_r2 = x_normalized * x_normalized + y_normalized * y_normalized
+    invalid_fov_mask = (normalized_r2 > 100) 
+    # 100 ~= tan(89.5), in general this type camera has no large FOV, here we mask the large
+    # normalized_r2 to avoid the overflow in later calculation
+    normalized_r2[invalid_fov_mask] = 0
+    normalized_r4 = normalized_r2 * normalized_r2
+    normalized_r6 = normalized_r4 * normalized_r2
     
-    radial = 1 + k1 * general_r2 + k2 * general_r4 + k3 * general_r6
+    radial = 1 + k1 * normalized_r2 + k2 * normalized_r4 + k3 * normalized_r6
     
     # the distorted radius is r * (1 + k1 * r^2 + k2 * r^4 + k3 * r^6)
     # the derivation of the distorted radius is 1 + 3 * k1 * r^2 + 5 * k2 * r^4 + 7 * k3 * r^6
-    distorted_r_derivation = 1 + 3 * k1 * general_r2 + 5 * k2 * general_r4 + 7 * k3 * general_r6
+    distorted_r_derivation = 1 + 3 * k1 * normalized_r2 + 5 * k2 * normalized_r4 + 7 * k3 * normalized_r6
     folded_general_pixel_mask = (distorted_r_derivation < 0)
     
-    dx = 2 * p1 * x_normalized * y_normalized + p2 * (general_r2 + 2 * x_normalized * x_normalized)
-    dy = p1 * (general_r2 + 2 * y_normalized * y_normalized) + 2 * p2 * x_normalized * y_normalized
+    dx = 2 * p1 * x_normalized * y_normalized + p2 * (normalized_r2 + 2 * x_normalized * x_normalized)
+    dy = p1 * (normalized_r2 + 2 * y_normalized * y_normalized) + 2 * p2 * x_normalized * y_normalized
     
     x_distorted_general = x_normalized * radial + dx
     y_distorted_general = y_normalized * radial + dy
 
-    general_invalid_mask = invalid_angle_mask | folded_general_pixel_mask
+    general_invalid_mask = invalid_fov_mask | folded_general_pixel_mask
     x_distorted_general[general_invalid_mask] = -1.0 # -1 is the invalid pixel
     y_distorted_general[general_invalid_mask] = -1.0 # -1 is the invalid pixel
     check_nan_or_inf(x_distorted_general, active=check_abnormal, name="x_distorted_general")
@@ -248,7 +246,7 @@ def camera_to_pixel(cam_points: torch.Tensor, calib_params: torch.Tensor, normal
     img_height = calib_params[..., CameraParamIndex.IMAGE_HEIGHT].unsqueeze(2)  # [B, C, 1]
 
     # get the invalid mask
-    invalid_mask = (x_pixel < 0) | (x_pixel > img_width - 1) | (y_pixel < 0) | (y_pixel > img_height - 1) | (z_cam <= 0)
+    invalid_mask = (x_pixel < 0) | (x_pixel > img_width - 1) | (y_pixel < 0) | (y_pixel > img_height - 1) #| (z_cam <= 0)
     
     # normalize to [0, 1] for consistency with the visibility check in gather_point_features
     if normalize:

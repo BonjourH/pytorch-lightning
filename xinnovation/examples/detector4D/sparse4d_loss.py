@@ -8,7 +8,10 @@ from xinnovation.src.core import TrajParamIndex
 from typing import Tuple, Dict, List, Any
 from torch.nn import functional as F
 import numpy as np
+from xinnovation.src.utils.debug_utils import check_nan_or_inf
 
+
+check_abnormal = True
 
 __all__ = ["Sparse4DLossWithDAC"]
 
@@ -137,6 +140,7 @@ class Sparse4DLossWithDAC(nn.Module):
                     matched_preds[:, TrajParamIndex.HAS_OBJECT],
                     matched_gts[:, TrajParamIndex.HAS_OBJECT]
                 )
+                check_nan_or_inf(cls_loss, active=check_abnormal, name=f"cls_loss_layer_{layer_idx}")
                 losses[f'layer_{layer_idx}_cls_loss'] = cls_loss * layer_loss_weight
                 
                 # 回归loss
@@ -144,6 +148,7 @@ class Sparse4DLossWithDAC(nn.Module):
                     matched_preds[:, TrajParamIndex.X:TrajParamIndex.END_OF_INDEX],
                     matched_gts[:, TrajParamIndex.X:TrajParamIndex.END_OF_INDEX]
                 )
+                check_nan_or_inf(reg_loss, active=check_abnormal, name=f"reg_loss_layer_{layer_idx}")
                 losses[f'layer_{layer_idx}_reg_loss'] = reg_loss * layer_loss_weight
             
             # 获取所有未匹配的预测轨迹
@@ -155,6 +160,7 @@ class Sparse4DLossWithDAC(nn.Module):
                     unmatched_preds[:, TrajParamIndex.HAS_OBJECT],
                     torch.zeros_like(unmatched_preds[:, TrajParamIndex.HAS_OBJECT])
                 )
+                check_nan_or_inf(fp_cls_loss, active=check_abnormal, name=f"fp_cls_loss_layer_{layer_idx}")
                 losses[f'layer_{layer_idx}_fp_cls_loss'] = fp_cls_loss * layer_loss_weight
         
         # 2. Add loss of cross-attention decoder
