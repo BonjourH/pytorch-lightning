@@ -3,6 +3,8 @@ import torch.nn as nn
 from xinnovation.src.core.registry import ATTENTION, NORM_LAYERS
 from typing import Optional, Dict
 from xinnovation.src.core import build_from_cfg
+from xinnovation.src.utils.debug_utils import check_nan_or_inf
+
 
 __all__ = ["DecoupledMultiHeadAttention"]
 

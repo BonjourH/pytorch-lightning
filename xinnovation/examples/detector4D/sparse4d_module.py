@@ -27,7 +27,12 @@ class Sparse4DModule(LightningDetector):
 
         assert "debug_config" in kwargs, "debug_config is required"
         self.debug_config = kwargs["debug_config"]
-        self.predictions = []
+
+        # Initialize validation metrics
+        self.val_step_outputs = []
+        
+        # Initialize predict metrics
+        self.predict_step_outputs = []
         
         # for visualization
         if self.debug_config.visualize_intermediate_results:
@@ -289,7 +294,7 @@ class Sparse4DModule(LightningDetector):
         
         # # Log losses
         for name, value in loss_dict.items():
-            self.log(f"train/{name}", value, on_step=True, on_epoch=True, prog_bar=True)
+            self.log(f"train/{name}", value, on_step=True, on_epoch=True, prog_bar=True, batch_size=batch['trajs'].shape[0])
             
         if self.debug_config.visualize_intermediate_results:
             print(f'Begin to visualize gt and pred trajs for training step {batch_idx}')

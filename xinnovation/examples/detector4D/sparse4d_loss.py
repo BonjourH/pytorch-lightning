@@ -145,8 +145,8 @@ class Sparse4DLossWithDAC(nn.Module):
                 
                 # 回归loss
                 reg_loss = F.smooth_l1_loss(
-                    matched_preds[:, TrajParamIndex.X:TrajParamIndex.END_OF_INDEX],
-                    matched_gts[:, TrajParamIndex.X:TrajParamIndex.END_OF_INDEX]
+                    matched_preds[:, TrajParamIndex.X:TrajParamIndex.HEIGHT + 1],
+                    matched_gts[:, TrajParamIndex.X:TrajParamIndex.HEIGHT + 1]
                 )
                 check_nan_or_inf(reg_loss, active=check_abnormal, name=f"reg_loss_layer_{layer_idx}")
                 losses[f'layer_{layer_idx}_reg_loss'] = reg_loss * layer_loss_weight
