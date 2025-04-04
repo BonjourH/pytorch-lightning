@@ -43,9 +43,9 @@ def get_transform_from_object_to_camera(
     acc_x = trajs[..., TrajParamIndex.AX].unsqueeze(-1)  # [B, N, 1]
     acc_y = trajs[..., TrajParamIndex.AY].unsqueeze(-1)  # [B, N, 1]
     
-    cos_yaw = trajs[..., TrajParamIndex.COS_YAW].unsqueeze(-1)  # [B, N, 1]
-    sin_yaw = trajs[..., TrajParamIndex.SIN_YAW].unsqueeze(-1)  # [B, N, 1]
-    yaw = torch.atan2(sin_yaw, cos_yaw)  # [B, N, 1]
+    traj_cos_yaw = trajs[..., TrajParamIndex.COS_YAW].unsqueeze(-1)  # [B, N, 1]
+    traj_sin_yaw = trajs[..., TrajParamIndex.SIN_YAW].unsqueeze(-1)  # [B, N, 1]
+    pred_yaw = torch.atan2(traj_sin_yaw, traj_cos_yaw)  # [B, N, 1]
     
     # Calculate position at time t using motion model (constant acceleration)
     # x(t) = x0 + v0*t + 0.5*a*t^2
@@ -60,9 +60,10 @@ def get_transform_from_object_to_camera(
     
     # Determine yaw based on velocity or use initial yaw
     speed_t = torch.sqrt(vel_x_t*vel_x_t + vel_y_t*vel_y_t)
+    velocity_yaw = torch.atan2(vel_y_t, vel_x_t)
     
     # If speed is sufficient, use velocity direction; otherwise use provided yaw
-    yaw_t = torch.where(speed_t > 0.2, torch.atan2(vel_y_t, vel_x_t), yaw)
+    yaw_t = torch.where(speed_t > 0.2, velocity_yaw, pred_yaw)
     
     # now we have pos_x_t, pos_y_t, pos_z_t, yaw_t, which is the Transform from object to current ego frame
     # shape: [B, N, T]
@@ -80,9 +81,9 @@ def get_transform_from_object_to_camera(
     ty_to_previous_ego = pos_x_t * sin_yaw + pos_y_t * cos_yaw + ego_y # [B, N, T]
     
     yaw_to_previous_ego = yaw_t + ego_yaw # [B, N, T]
-      
+
     cos1, sin1 = torch.cos(yaw_to_previous_ego), torch.sin(yaw_to_previous_ego)
-    
+      
     zeros = torch.zeros_like(yaw_to_previous_ego)
     ones = torch.ones_like(yaw_to_previous_ego)
     

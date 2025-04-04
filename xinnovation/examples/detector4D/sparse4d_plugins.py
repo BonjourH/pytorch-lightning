@@ -63,10 +63,12 @@ class AnchorEncoder(nn.Module):
         print(f"total anchors: {self.anchors.shape[0]}")
         self.anchor_generator.save_bev_anchor_fig(os.getcwd())
         # self.init_trajs = torch.zeros(self.anchors.shape[0], TrajParamIndex.END_OF_INDEX)
-        self.init_trajs = torch.rand(self.anchors.shape[0], TrajParamIndex.END_OF_INDEX)
+        self.init_trajs = torch.zeros(self.anchors.shape[0], TrajParamIndex.END_OF_INDEX)
         self.init_trajs[:, TrajParamIndex.X:TrajParamIndex.Z + 1] = self.anchors[:, :3]
         self.init_trajs[:, TrajParamIndex.LENGTH:TrajParamIndex.HEIGHT + 1] = self.anchors[:, 3:6]
         self.init_trajs[:, TrajParamIndex.X] = self.init_trajs[:, TrajParamIndex.X] + 4.5 # front bumper to imu
+        self.init_trajs[:, TrajParamIndex.VX] = 23.0
+        self.init_trajs[:, TrajParamIndex.COS_YAW] = 1.0
         self.init_trajs = self.init_trajs.unsqueeze(0)
         return self.init_trajs
     
