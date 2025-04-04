@@ -67,6 +67,26 @@ lightning_module = dict(
     loss=dict(
         type="Sparse4DLossWithDAC",
         layer_loss_weights=[0.5, 0.6, 0.6, 0.7, 0.7, 0.8, 0.9],
+        has_object_loss=dict(
+            type="FocalLoss",
+            alpha=0.25,
+            gamma=2.0,
+            reduction="sum",
+            loss_weight=1.0
+        ),
+        attribute_loss=dict(
+            type="FocalLoss",
+            alpha=[0.25 for _ in range(num_classes - 1)],
+            gamma=2.0,
+            reduction="sum",
+            loss_weight=0.2
+        ),
+        regression_loss=dict(
+            type="SmoothL1Loss",
+            beta=1.0,
+            reduction="sum",
+            loss_weight=1.0
+        ),
     ),
     detector=dict(
         type="Sparse4DDetector",
@@ -181,7 +201,7 @@ lightning_module = dict(
         render_gt_trajs=True,
         render_init_trajs=False,
         render_pred_trajs=True,
-        pred_traj_threshold=0.6,
+        pred_traj_threshold=0.3,
         render_trajs_interval=2, # every 10 epochs
         gt_color=[0.0, 255.0, 0.0],
         init_color=[0.0, 0.0, 255.0],

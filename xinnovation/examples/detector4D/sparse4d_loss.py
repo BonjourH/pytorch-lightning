@@ -1,4 +1,6 @@
 from xinnovation.src.core.registry import LOSSES
+from xinnovation.src.components.lightning_module.losses.classification import FocalLoss
+from xinnovation.src.components.lightning_module.losses.regression import SmoothL1Loss
 import torch.nn as nn
 import torch
 from dataclasses import dataclass
@@ -11,18 +13,26 @@ import numpy as np
 from xinnovation.src.utils.debug_utils import check_nan_or_inf
 
 
-check_abnormal = True
+check_abnormal = False
 
 __all__ = ["Sparse4DLossWithDAC"]
 
 
 @LOSSES.register_module()
 class Sparse4DLossWithDAC(nn.Module):
-    def __init__(self, layer_loss_weights: List[float], **kwargs):
+    def __init__(self, layer_loss_weights: List[float],
+                    has_object_loss: dict,
+                    attribute_loss: dict,
+                    regression_loss: dict,
+                    **kwargs):
         super().__init__()
         # store matching history of the first batch of different layers
         self.layer_loss_weights = layer_loss_weights
         self.matching_history: Dict[int, List[Tuple[int, int]]] = {} # layer_idx -> List[(gt_idx, pred_idx)]
+        
+        self.has_object_loss = LOSSES.build(has_object_loss)
+        self.attribute_loss = LOSSES.build(attribute_loss)
+        self.regression_loss = LOSSES.build(regression_loss)
     
     def reset_matching_history(self):
         self.matching_history = {}
@@ -110,59 +120,43 @@ class Sparse4DLossWithDAC(nn.Module):
         for layer_idx, pred_trajs in enumerate(outputs):
             indices = self._compute_hungarian_match_results(gt_trajs, pred_trajs, valid_gt_nbs)
             self._save_matching_history(layer_idx, indices)
+            
+            # 1.1 create matched mask and reordered gts
+            matched_mask = torch.zeros(B, N, dtype=torch.bool, device=pred_trajs.device)
+            gt_trajs_reordered = torch.zeros_like(pred_trajs)
+            num_positive_preds = 0
 
-            # 收集所有batch中匹配的预测和真实轨迹
-            matched_preds = []
-            matched_gts = []
-            
-            # 创建mask来标识未匹配的预测轨迹
-            unmatched_mask = torch.ones(B, N, dtype=torch.bool, device=pred_trajs.device)
-            
-            # 收集匹配的轨迹和标记未匹配的轨迹
             for b, indice in enumerate(indices):
                 gt_idx, pred_idx = indice
-                # 收集匹配的轨迹
-                matched_preds.append(pred_trajs[b, pred_idx])
-                matched_gts.append(gt_trajs[b, gt_idx])
-                
-                # 标记已匹配的轨迹
-                unmatched_mask[b, pred_idx] = False
-            
+
+                gt_trajs_reordered[b, pred_idx] = gt_trajs[b, gt_idx]
+                matched_mask[b, pred_idx] = True
+                num_positive_preds += len(pred_idx)
+
             layer_loss_weight = self.layer_loss_weights[layer_idx]
-            # 堆叠所有匹配的轨迹
-            if matched_preds:  # 如果存在匹配的轨迹
-                matched_preds = torch.cat(matched_preds, dim=0)  # [total_matches, TrajParamIndex.END_OF_INDEX]
-                matched_gts = torch.cat(matched_gts, dim=0)      # [total_matches, TrajParamIndex.END_OF_INDEX]
-                
-                # 计算匹配轨迹的losses (true positives)
-                # 分类loss
-                cls_loss = F.binary_cross_entropy_with_logits(
-                    matched_preds[:, TrajParamIndex.HAS_OBJECT],
-                    matched_gts[:, TrajParamIndex.HAS_OBJECT]
+
+            # 1.2 calculate the has object classification loss for all the preds
+            obj_loss = self.has_object_loss(pred_trajs[:, :, TrajParamIndex.HAS_OBJECT].flatten(end_dim=1),
+                                            gt_trajs_reordered[:, :, TrajParamIndex.HAS_OBJECT].flatten(end_dim=1))
+            losses[f'layer_{layer_idx}_obj_loss'] = obj_loss * layer_loss_weight
+            if num_positive_preds > 0:
+                # 1.3 calculate loss for positive preds
+                # from [B, N, TrajParamIndex.END_OF_INDEX] to [num_positive_preds, TrajParamIndex.END_OF_INDEX]
+                positive_preds = pred_trajs[matched_mask] 
+                positive_gts = gt_trajs_reordered[matched_mask]
+                # 1.3.1 calculate the other attribute classification loss for all the positive preds
+                attribute_loss = self.attribute_loss(
+                    positive_preds[:, TrajParamIndex.HAS_OBJECT + 1:],
+                    positive_gts[:, TrajParamIndex.HAS_OBJECT + 1:]
+                ) 
+                losses[f'layer_{layer_idx}_attr_loss'] = attribute_loss * layer_loss_weight
+                # 1.3.2 calculate the regression loss for all the positive preds
+                regression_loss = self.regression_loss(
+                    positive_preds[:, TrajParamIndex.X:TrajParamIndex.HEIGHT + 1],
+                    positive_gts[:, TrajParamIndex.X:TrajParamIndex.HEIGHT + 1]
                 )
-                check_nan_or_inf(cls_loss, active=check_abnormal, name=f"cls_loss_layer_{layer_idx}")
-                losses[f'layer_{layer_idx}_cls_loss'] = cls_loss * layer_loss_weight
-                
-                # 回归loss
-                reg_loss = F.smooth_l1_loss(
-                    matched_preds[:, TrajParamIndex.X:TrajParamIndex.HEIGHT + 1],
-                    matched_gts[:, TrajParamIndex.X:TrajParamIndex.HEIGHT + 1]
-                )
-                check_nan_or_inf(reg_loss, active=check_abnormal, name=f"reg_loss_layer_{layer_idx}")
-                losses[f'layer_{layer_idx}_reg_loss'] = reg_loss * layer_loss_weight
+                losses[f'layer_{layer_idx}_reg_loss'] = regression_loss * layer_loss_weight
             
-            # 获取所有未匹配的预测轨迹
-            unmatched_preds = pred_trajs[unmatched_mask]  # [total_unmatched, TrajParamIndex.END_OF_INDEX]
-            
-            # 计算未匹配轨迹的losses (false positives)
-            if len(unmatched_preds) > 0:
-                fp_cls_loss = F.binary_cross_entropy_with_logits(
-                    unmatched_preds[:, TrajParamIndex.HAS_OBJECT],
-                    torch.zeros_like(unmatched_preds[:, TrajParamIndex.HAS_OBJECT])
-                )
-                check_nan_or_inf(fp_cls_loss, active=check_abnormal, name=f"fp_cls_loss_layer_{layer_idx}")
-                losses[f'layer_{layer_idx}_fp_cls_loss'] = fp_cls_loss * layer_loss_weight
-        
         # 2. Add loss of cross-attention decoder
         if c_outputs is not None:
             for layer_idx, pred_trajs in enumerate(c_outputs[1:]):

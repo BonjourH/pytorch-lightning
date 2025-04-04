@@ -135,8 +135,7 @@ class TrajParamIndex(IntEnum):
     CYCLIST = 23
     MOTORCYCLIST = 24
     CONE = 25
-    BACKGROUND = 26
-    END_OF_INDEX = 27
+    END_OF_INDEX = 26
     
     def __str__(self):
         return self.name

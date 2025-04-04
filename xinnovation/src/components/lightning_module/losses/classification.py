@@ -16,12 +16,14 @@ class FocalLoss(nn.Module):
             Defaults to 0.25.
         gamma (float, optional): Focusing parameter. Defaults to 2.0.
         reduction (str, optional): Reduction method. Defaults to 'mean'.
+        loss_weight (float, optional): Weight of the loss. Defaults to 1.0.
     """
     def __init__(
         self,
-        alpha: Union[float, List[float], torch.Tensor] = 0.25,
+        alpha: Union[float, List[float]] = 0.25,
         gamma: float = 2.0,
-        reduction: str = 'mean'
+        reduction: str = 'mean',
+        loss_weight: float = 1.0
     ):
         super().__init__()
         
@@ -29,7 +31,7 @@ class FocalLoss(nn.Module):
         self.reduction = reduction
         
         # Register alpha as buffer if it's a list/tensor
-        if isinstance(alpha, (list, torch.Tensor)):
+        if isinstance(alpha, list):
             self.register_buffer('alpha', torch.tensor(alpha, dtype=torch.float32))
             self.alpha = self.alpha.unsqueeze(0)
         else:
@@ -58,14 +60,15 @@ class FocalLoss(nn.Module):
         # Sigmoid computation and focal weight
         pred_sigmoid = pred.sigmoid()
         pt = (1 - pred_sigmoid) * target + pred_sigmoid * (1 - target)
-        focal_weight = pt.pow(self.gamma)
+        focal_weight = pt.pow(self.gamma) * self.alpha
 
         # Compute loss with reduction
-        return F.binary_cross_entropy_with_logits(
+        loss = F.binary_cross_entropy_with_logits(
             pred, target, 
-            weight=self.alpha * focal_weight, 
+            weight=focal_weight, 
             reduction=self.reduction
         )
+        return loss * self.loss_weight
 
 @LOSSES.register_module()
 class MultiClassFocalLoss(nn.Module):
@@ -77,13 +80,15 @@ class MultiClassFocalLoss(nn.Module):
             - If List[float]/torch.Tensor: One weight per class.
         gamma (float, optional): Focusing parameter. Defaults to 2.0.
         reduction (str, optional): Reduction method. Defaults to 'mean'.
+        loss_weight (float, optional): Weight of the loss. Defaults to 1.0.
     """
     
     def __init__(
         self, 
         alpha: Union[float, List[float], torch.Tensor] = 0.25, 
         gamma: float = 2.0, 
-        reduction: str = 'mean'
+        reduction: str = 'mean',
+        loss_weight: float = 1.0
     ):
         super().__init__()
 
@@ -132,6 +137,8 @@ class MultiClassFocalLoss(nn.Module):
         
         # Apply focal weight
         loss = ce_loss * focal_weight.sum(dim=1)
+        
+        loss = loss * self.loss_weight
         
         # Apply reduction
         return (

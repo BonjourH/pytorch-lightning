@@ -48,8 +48,7 @@ class Sparse4DModule(LightningDetector):
                       calibrations: torch.Tensor,
                       ego_states: torch.Tensor, 
                       imgs_dict: Dict[SourceCameraId, torch.Tensor], 
-                      color: torch.Tensor=torch.tensor([255.0, 0.0, 0.0]),
-                      threshold: float=0.7) -> Tuple[Dict[SourceCameraId, torch.Tensor], Dict[SourceCameraId, np.ndarray]]:
+                      color: torch.Tensor=torch.tensor([255.0, 0.0, 0.0])) -> Tuple[Dict[SourceCameraId, torch.Tensor], Dict[SourceCameraId, np.ndarray]]:
         """
         Render trajectories on images.
         Args:
@@ -69,7 +68,7 @@ class Sparse4DModule(LightningDetector):
         pixels = pixels.view(B, T, N, C, P, 2)
         
         # disable pixels of false positive trajectories
-        traj_fp_mask = trajs[..., TrajParamIndex.HAS_OBJECT].sigmoid() < threshold # [B, N]
+        traj_fp_mask = trajs[..., TrajParamIndex.HAS_OBJECT].sigmoid() < self.debug_config.pred_traj_threshold # [B, N]
         traj_fp_mask = traj_fp_mask.unsqueeze(1).unsqueeze(3).unsqueeze(4).expand(-1, T, -1, C, P)
         pixels[traj_fp_mask, :] = -1
 
@@ -347,8 +346,7 @@ class Sparse4DModule(LightningDetector):
                                                     batch['calibrations'],
                                                     batch['ego_states'], 
                                                     imgs_dict,
-                                                    color=torch.tensor(self.debug_config.pred_color),
-                                                    threshold=self.debug_config.pred_traj_threshold)
+                                                    color=torch.tensor(self.debug_config.pred_color))
         
         # 4. save images
         save_dir = os.path.join(self.debug_config.visualize_intermediate_results_dir, mode)
@@ -392,7 +390,7 @@ class Sparse4DModule(LightningDetector):
         
         # Log losses
         for name, value in loss_dict.items():
-            self.log(f"val/{name}", value, on_step=False, on_epoch=True, prog_bar=True)
+            self.log(f"val/{name}", value, on_step=False, on_epoch=True, prog_bar=True, batch_size=batch['trajs'].shape[0])
         
         return loss_dict
     
@@ -419,8 +417,8 @@ class Sparse4DModule(LightningDetector):
             print(f"  Targets shape: {gt_trajs.shape}")
             
             # Filter valid predictions and targets
-            valid_mask_preds = torch.sigmoid(pred_trajs[..., TrajParamIndex.HAS_OBJECT]) > 0.5  # HAS_OBJECT flag
-            valid_mask_targets = gt_trajs[..., TrajParamIndex.HAS_OBJECT] > 0.5
+            valid_mask_preds = torch.sigmoid(pred_trajs[..., TrajParamIndex.HAS_OBJECT]) > self.debug_config.pred_traj_threshold  # HAS_OBJECT flag
+            valid_mask_targets = gt_trajs[..., TrajParamIndex.HAS_OBJECT] > self.debug_config.pred_traj_threshold
             
             print(f"  Valid predictions: {valid_mask_preds.sum().item()}")
             print(f"  Valid targets: {valid_mask_targets.sum().item()}")
