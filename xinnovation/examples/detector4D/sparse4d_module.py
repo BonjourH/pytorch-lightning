@@ -9,12 +9,13 @@ from xinnovation.src.utils.math_utils import sample_bbox_edge_points
 from xinnovation.src.utils.pose_transform import project_points_to_image
 from .sparse4d_detector import Sparse4DDetector
 from .sparse4d_loss import Sparse4DLossWithDAC
-from .sparse4d_dataset import TrainingSample
+from .sparse4d_dataset import TrainingSample, CAMERA_ID_LIST
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 import json
 import os
+import glob
 
 
 __all__ = ["Sparse4DModule"]
@@ -47,7 +48,8 @@ class Sparse4DModule(LightningDetector):
                       calibrations: torch.Tensor,
                       ego_states: torch.Tensor, 
                       imgs_dict: Dict[SourceCameraId, torch.Tensor], 
-                      color: torch.Tensor=torch.tensor([255.0, 0.0, 0.0])) -> Tuple[Dict[SourceCameraId, torch.Tensor], Dict[SourceCameraId, np.ndarray]]:
+                      color: torch.Tensor=torch.tensor([255.0, 0.0, 0.0]),
+                      threshold: float=0.7) -> Tuple[Dict[SourceCameraId, torch.Tensor], Dict[SourceCameraId, np.ndarray]]:
         """
         Render trajectories on images.
         Args:
@@ -67,7 +69,7 @@ class Sparse4DModule(LightningDetector):
         pixels = pixels.view(B, T, N, C, P, 2)
         
         # disable pixels of false positive trajectories
-        traj_fp_mask = trajs[..., TrajParamIndex.HAS_OBJECT] < 0.5 # [B, N]
+        traj_fp_mask = trajs[..., TrajParamIndex.HAS_OBJECT].sigmoid() < threshold # [B, N]
         traj_fp_mask = traj_fp_mask.unsqueeze(1).unsqueeze(3).unsqueeze(4).expand(-1, T, -1, C, P)
         pixels[traj_fp_mask, :] = -1
 
@@ -132,66 +134,27 @@ class Sparse4DModule(LightningDetector):
     
         return imgs_dict, concat_imgs
     
-    def visualize_init_trajs(self, batch: Dict):
-        """Visualize initial trajectories."""
-        # 1. read images
-        imgs_dict = TrainingSample.read_seqeuntial_images_to_tensor(batch['image_paths'], self.device)
-        # imgs_dict: Dict[SourceCameraId, torch.Tensor[B, T, C, H, W]]  
-        
-        # 2. render init trajs
-        init_trajs = self.net.decoder.init_trajs.expand(batch['ego_states'].shape[0], -1, -1)
-        imgs_dict, concat_imgs = self._render_trajs_on_imgs(init_trajs, 
-                                                    batch['camera_ids'],
-                                                    batch['calibrations'],
-                                                    batch['ego_states'], 
-                                                    imgs_dict,
-                                                    color=torch.tensor([0.0, 255.0, 0.0]))
-        
-        # 3. save images
-        save_dir = os.path.join(self.debug_config.visualize_intermediate_results_dir, 'init')
-        os.makedirs(save_dir, exist_ok=True)
-        for camera_id in imgs_dict.keys():
-            cv2.imwrite(os.path.join(save_dir, f'init_{camera_id}.png'), concat_imgs[camera_id])
-        
-    def visualize_gt_trajs(self, batch: Dict):
-        """Visualize ground truth trajectories."""
-        # 1. read images
-        imgs_dict = TrainingSample.read_seqeuntial_images_to_tensor(batch['image_paths'], self.device)
-        # imgs_dict: Dict[SourceCameraId, torch.Tensor[B, T, C, H, W]]
-        
-        # 2. render gt trajs
-        imgs_dict, concat_imgs = self._render_trajs_on_imgs(batch['trajs'], 
-                                                    batch['camera_ids'],
-                                                    batch['calibrations'],
-                                                    batch['ego_states'], 
-                                                    imgs_dict,
-                                                    color=torch.tensor([0.0, 255.0, 0.0]))
-       
-        # 3. save images
-        save_dir = os.path.join(self.debug_config.visualize_intermediate_results_dir, 'gt')
-        os.makedirs(save_dir, exist_ok=True)
-        for camera_id in imgs_dict.keys():
-            cv2.imwrite(os.path.join(save_dir, f'gt_{camera_id}.png'), concat_imgs[camera_id])
-        
-    def visualize_pred_trajs(self, outputs: List[Dict]):
-        """Visualize predicted trajectories."""
+    def on_train_batch_start(self, batch, batch_idx):
+        """On train batch start."""
         pass
-    
+            
     def on_train_start(self):
         """On train start."""
         print("On train start")
         # 确保重置匹配历史记录
         self.criterion.reset_matching_history()
-        
+
+        # create log dir
+        os.makedirs(self.debug_config.log_dir, exist_ok=True)
+
         # save config file
         config_path = os.path.join(self.debug_config.log_dir, "train_config.json")
         with open(config_path, 'w') as f:
             json.dump(self.hparams, f, indent=2)
-            
-    def on_train_end(self):
-        """On train end, visualize the matching history."""
+
+    def _save_matching_history(self):
+        """Save the matching history."""
         print("Visualizing matching history...")
-        
         # 获取匹配历史记录
         matching_history = self.criterion.matching_history
         
@@ -283,62 +246,139 @@ class Sparse4DModule(LightningDetector):
             plt.close()
         
         print(f"Matching visualization completed. Results saved to {vis_dir}")
-    
+
+    def _generate_pred_trajs_video(self, mode: str="train"):
+        """Generate the video of the predicted trajectories."""
+        if not self.debug_config.visualize_intermediate_results:
+            return
+        print("Generating the video of the predicted trajectories...")
+        trajs_dir = os.path.join(self.debug_config.visualize_intermediate_results_dir, mode)
+        if not os.path.exists(trajs_dir):
+            print(f"No predicted trajectories to visualize for {mode} mode")
+            return
+        
+        img_files = glob.glob(os.path.join(trajs_dir, "*.png"))
+        epoch_interval = self.debug_config.render_trajs_interval if mode == "train" else 1
+
+        for camera_id in CAMERA_ID_LIST:
+            camera_name = camera_id.name
+            camera_img_files = [file for file in img_files if camera_name in file]
+            camera_img_files.sort()
+            
+            # Save frames to a temporary directory
+            temp_dir = os.path.join(trajs_dir, f"temp_{camera_name}")
+            os.makedirs(temp_dir, exist_ok=True)
+            
+            # Copy and rename frames sequentially for ffmpeg
+            for i, img_file in enumerate(camera_img_files):
+                img = cv2.imread(img_file)
+                if img is not None:
+                    frame_path = os.path.join(temp_dir, f"frame_{i:04d}.png")
+                    # plot "Epoch xxx" on the top middle of the image
+                    epoch = i * epoch_interval
+                    cv2.putText(img, f"Epoch {epoch}", (img.shape[1] // 2, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+                    cv2.imwrite(frame_path, img)
+            
+            # Use ffmpeg to create the video
+            video_path = os.path.join(self.debug_config.visualize_intermediate_results_dir, f"{mode}_{camera_name}.mp4")
+            ffmpeg_cmd = f"ffmpeg -y -framerate 10 -i {temp_dir}/frame_%04d.png -c:v libx264 -pix_fmt yuv420p {video_path}"
+            os.system(ffmpeg_cmd)
+            
+            # Clean up temporary directory
+            import shutil
+            shutil.rmtree(temp_dir)
+
+    def on_train_end(self):
+        """On train end, visualize the matching history."""
+        self._save_matching_history()
+        self._generate_pred_trajs_video(mode="train")
+        self._generate_pred_trajs_video(mode="val")
+        
+    def on_validation_end(self):
+        """On validation end, visualize the matching history."""
+        pass
+        
+    def visualize_init_trajs(self, batch: Dict):
+        """Visualize initial trajectories."""
+        # 1. read images
+        imgs_dict = TrainingSample.read_seqeuntial_images_to_tensor(batch['image_paths'], self.device)
+        # 2. render init trajs
+        init_trajs = self.detector.get_init_trajs(batch['ego_states'].shape[0])
+        imgs_dict, concat_imgs = self._render_trajs_on_imgs(init_trajs, 
+                                                batch['camera_ids'],
+                                                batch['calibrations'],
+                                                batch['ego_states'], 
+                                                imgs_dict,
+                                                color=torch.tensor(self.debug_config.init_color))
+        
+        # 3. save images
+        save_dir = os.path.join(self.debug_config.visualize_intermediate_results_dir, "init_trajs")
+        os.makedirs(save_dir, exist_ok=True)
+        for camera_id in concat_imgs.keys():
+            img_name = f'Init_trajs_{camera_id.name}.png'
+            cv2.imwrite(os.path.join(save_dir, img_name), concat_imgs[camera_id])
+
+    def save_intermediate_results(self, batch: Dict, batch_idx: int, trajs: torch.Tensor, mode: str="train"):
+        """
+        Save intermediate results for visualization, only save the first batch for training and validation.
+        Args:
+            batch: Dict
+            batch_idx: int
+            trajs: torch.Tensor, take the trajs of the last decoder layer
+        """
+        if not (self.debug_config.visualize_intermediate_results and batch_idx == 0):
+            return
+        if mode == "train" and self.current_epoch % self.debug_config.render_trajs_interval != 0:
+            return
+        # 1. read images
+        imgs_dict = TrainingSample.read_seqeuntial_images_to_tensor(batch['image_paths'], self.device)
+        # 2. render gt trajs
+        if self.debug_config.render_gt_trajs:
+            imgs_dict, concat_imgs = self._render_trajs_on_imgs(batch['trajs'], 
+                                                    batch['camera_ids'],
+                                                    batch['calibrations'],
+                                                    batch['ego_states'], 
+                                                    imgs_dict,
+                                                    color=torch.tensor(self.debug_config.gt_color))
+        # 3. visualize pred trajs
+        if self.debug_config.render_pred_trajs:
+            imgs_dict, concat_imgs = self._render_trajs_on_imgs(trajs, 
+                                                    batch['camera_ids'],
+                                                    batch['calibrations'],
+                                                    batch['ego_states'], 
+                                                    imgs_dict,
+                                                    color=torch.tensor(self.debug_config.pred_color),
+                                                    threshold=self.debug_config.pred_traj_threshold)
+        
+        # 4. save images
+        save_dir = os.path.join(self.debug_config.visualize_intermediate_results_dir, mode)
+        os.makedirs(save_dir, exist_ok=True)
+        epoch_str = f"{self.current_epoch:05d}"
+        for camera_id in concat_imgs.keys():
+            img_name = f'epoch_{epoch_str}_{camera_id.name}.png'
+            cv2.imwrite(os.path.join(save_dir, img_name), concat_imgs[camera_id])
+        
     def training_step(self, batch: Dict, batch_idx: int) -> Dict:
         """Training step."""
-        # # Forward pass
+        # Forward pass
         outputs, c_outputs, quality = self(batch)
         
-        # # Compute loss
+        self.save_intermediate_results(batch, batch_idx, outputs[-1], mode="train")
+        # Compute loss
         loss_dict = self.criterion(batch['trajs'], outputs, c_outputs)
         
         # # Log losses
         for name, value in loss_dict.items():
             self.log(f"train/{name}", value, on_step=True, on_epoch=True, prog_bar=True, batch_size=batch['trajs'].shape[0])
             
-        if self.debug_config.visualize_intermediate_results:
-            print(f'Begin to visualize gt and pred trajs for training step {batch_idx}')
-            # 1. read images
-            imgs_dict = TrainingSample.read_seqeuntial_images_to_tensor(batch['image_paths'], self.device)
-            # 2. render gt trajs
-            if self.debug_config.render_gt_trajs:
-                imgs_dict, concat_imgs = self._render_trajs_on_imgs(batch['trajs'], 
-                                                        batch['camera_ids'],
-                                                        batch['calibrations'],
-                                                        batch['ego_states'], 
-                                                        imgs_dict,
-                                                        color=torch.tensor(self.debug_config.gt_color))
-            # 3. visualize init trajs
-            if self.debug_config.render_init_trajs:
-                init_trajs = self.detector.get_init_trajs(batch['ego_states'].shape[0])
-                imgs_dict, concat_imgs = self._render_trajs_on_imgs(init_trajs, 
-                                                        batch['camera_ids'],
-                                                        batch['calibrations'],
-                                                        batch['ego_states'], 
-                                                        imgs_dict,
-                                                        color=torch.tensor(self.debug_config.init_color))
-            # 4. visualize pred trajs
-            if self.debug_config.render_pred_trajs:
-                imgs_dict, concat_imgs = self._render_trajs_on_imgs(outputs[-1]['trajs'], 
-                                                        batch['camera_ids'],
-                                                        batch['calibrations'],
-                                                        batch['ego_states'], 
-                                                        imgs_dict,
-                                                        color=torch.tensor(self.debug_config.pred_color))
-            
-            # 5. save images
-            save_dir = os.path.join(self.debug_config.visualize_intermediate_results_dir)
-            os.makedirs(save_dir, exist_ok=True)
-            for camera_id in concat_imgs.keys():
-                img_name = f'{camera_id.name}_{batch_idx}.png'
-                cv2.imwrite(os.path.join(save_dir, img_name), concat_imgs[camera_id])
-
         return loss_dict
     
     def validation_step(self, batch: Dict, batch_idx: int) -> Dict:
         """Validation step."""
         # Forward pass
         outputs, c_outputs, quality = self(batch)
+
+        self.save_intermediate_results(batch, batch_idx, outputs[-1], mode="val")
         
         # Compute loss
         loss_dict = self.criterion(batch['trajs'], outputs, c_outputs)
@@ -422,6 +462,7 @@ class Sparse4DModule(LightningDetector):
         """On predict start."""
         print("On predict start")
         # save config file
+        os.makedirs(self.debug_config.log_dir, exist_ok=True)
         os.makedirs(self.debug_config.predict_dir, exist_ok=True)
         config_path = os.path.join(self.debug_config.predict_dir, "predict_config.json")
         with open(config_path, 'w') as f:

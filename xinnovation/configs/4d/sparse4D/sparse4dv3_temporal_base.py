@@ -176,17 +176,19 @@ lightning_module = dict(
         ) if use_temp_attention else None
     ),
     debug_config = dict(
-        visualize_intermediate_results=False,
+        visualize_intermediate_results=True,
         visualize_intermediate_results_dir="/home/xinjian/Code/pytorch-lightning/visualize_intermediate_results",
         render_gt_trajs=True,
         render_init_trajs=False,
-        render_pred_trajs=False,
+        render_pred_trajs=True,
+        pred_traj_threshold=0.6,
+        render_trajs_interval=2, # every 10 epochs
         gt_color=[0.0, 255.0, 0.0],
         init_color=[0.0, 0.0, 255.0],
         pred_color=[255.0, 0.0, 0.0],
         point_radius=1,
-        log_dir="/home/xinjian/Code/pytorch-lightning/logs",
-        predict_dir="/home/xinjian/Code/pytorch-lightning/predict",
+        log_dir=f"{save_dir}/logs/{exp_name}",
+        predict_dir=f"{save_dir}/predict/{exp_name}",
     ),
 )
 # ============================== 3. Data Config ==============================
@@ -197,7 +199,7 @@ lightning_data_module = dict(
     batch_size=1,
     num_workers=4,
     sequence_length=seq_length,
-    shuffle=True,
+    shuffle=False,
     persistent_workers=True,
     pin_memory=True,
     camera_groups=[CameraGroupConfig.front_stereo_camera_group(), CameraGroupConfig.short_focal_length_camera_group(), CameraGroupConfig.rear_camera_group()]
@@ -232,7 +234,7 @@ lightning_trainer = dict(
     default_root_dir=save_dir,
     enable_model_summary=True,
     # Training loop parameters
-    max_epochs=50,
+    max_epochs=200,
     min_epochs=None,
     max_steps=-1,
     min_steps=None,

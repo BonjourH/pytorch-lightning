@@ -197,7 +197,7 @@ def camera_to_pixel(cam_points: torch.Tensor, calib_params: torch.Tensor, normal
     x_normalized = x_cam / z_cam 
     y_normalized = y_cam / z_cam
     normalized_r2 = x_normalized * x_normalized + y_normalized * y_normalized
-    invalid_fov_mask = (normalized_r2 > 100) 
+    invalid_fov_mask = (normalized_r2 > 100) | (z_cam < 0)
     # 100 ~= tan(89.5), in general this type camera has no large FOV, here we mask the large
     # normalized_r2 to avoid the overflow in later calculation
     normalized_r2[invalid_fov_mask] = 0
