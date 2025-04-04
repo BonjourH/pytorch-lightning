@@ -145,11 +145,11 @@ class Sparse4DLossWithDAC(nn.Module):
                 positive_preds = pred_trajs[matched_mask] 
                 positive_gts = gt_trajs_reordered[matched_mask]
                 # 1.3.1 calculate the other attribute classification loss for all the positive preds
-                attribute_loss = self.attribute_loss(
-                    positive_preds[:, TrajParamIndex.HAS_OBJECT + 1:],
-                    positive_gts[:, TrajParamIndex.HAS_OBJECT + 1:]
-                ) 
-                losses[f'layer_{layer_idx}_attr_loss'] = attribute_loss * layer_loss_weight
+                # attribute_loss = self.attribute_loss(
+                #     positive_preds[:, TrajParamIndex.HAS_OBJECT + 1:],
+                #     positive_gts[:, TrajParamIndex.HAS_OBJECT + 1:]
+                # ) 
+                # losses[f'layer_{layer_idx}_attr_loss'] = attribute_loss * layer_loss_weight
                 # 1.3.2 calculate the regression loss for all the positive preds
                 regression_loss = self.regression_loss(
                     positive_preds[:, TrajParamIndex.X:TrajParamIndex.HEIGHT + 1],

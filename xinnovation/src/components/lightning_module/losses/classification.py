@@ -23,13 +23,16 @@ class FocalLoss(nn.Module):
         alpha: Union[float, List[float]] = 0.25,
         gamma: float = 2.0,
         reduction: str = 'mean',
-        loss_weight: float = 1.0
+        loss_weight: float = 1.0,
+        pos_weight: List[float] = [1.0]
     ):
         super().__init__()
         
         self.gamma = gamma
         self.reduction = reduction
-        
+        self.loss_weight = loss_weight
+        self.register_buffer('pos_weight', torch.tensor(pos_weight, dtype=torch.float32))
+
         # Register alpha as buffer if it's a list/tensor
         if isinstance(alpha, list):
             self.register_buffer('alpha', torch.tensor(alpha, dtype=torch.float32))
@@ -48,8 +51,9 @@ class FocalLoss(nn.Module):
                     C: number of classes
                     *: any number of additional dimensions
             target (torch.Tensor): Target labels
-                - Shape: (B, *)
+                - Shape: (B, C, *)
                     B: batch size
+                    C: number of classes
                     *: any number of additional dimensions
         Returns:
             torch.Tensor: Computed focal loss
@@ -59,14 +63,15 @@ class FocalLoss(nn.Module):
 
         # Sigmoid computation and focal weight
         pred_sigmoid = pred.sigmoid()
-        pt = (1 - pred_sigmoid) * target + pred_sigmoid * (1 - target)
+        pt = (1 - pred_sigmoid + 1e-8) * target + (pred_sigmoid + 1e-8) * (1 - target)
         focal_weight = pt.pow(self.gamma) * self.alpha
-
+        
         # Compute loss with reduction
         loss = F.binary_cross_entropy_with_logits(
             pred, target, 
-            weight=focal_weight, 
-            reduction=self.reduction
+            weight=focal_weight.detach(),
+            reduction=self.reduction,
+            pos_weight=self.pos_weight
         )
         return loss * self.loss_weight
 
@@ -88,15 +93,18 @@ class MultiClassFocalLoss(nn.Module):
         alpha: Union[float, List[float], torch.Tensor] = 0.25, 
         gamma: float = 2.0, 
         reduction: str = 'mean',
-        loss_weight: float = 1.0
+        loss_weight: float = 1.0,
+        pos_weight: List[float] = [1.0]
     ):
         super().__init__()
 
         self.gamma = gamma
         self.reduction = reduction
+        self.loss_weight = loss_weight
+        self.register_buffer('pos_weight', torch.tensor(pos_weight, dtype=torch.float32))
         
         # Register alpha as buffer if it's a list/tensor
-        if isinstance(alpha, (list, torch.Tensor)):
+        if isinstance(alpha, list):
             self.register_buffer('alpha', torch.tensor(alpha, dtype=torch.float32))
             self.alpha = self.alpha.unsqueeze(0) # (1, C)
         else:
@@ -130,12 +138,13 @@ class MultiClassFocalLoss(nn.Module):
         prob = F.softmax(pred, dim=1)
         
         # Compute focal weight
-        focal_weight = ((1 - prob) * target + prob * (1 - target)).pow(self.gamma)
+        focal_weight = ((1 - prob + 1e-8) * target + (prob + 1e-8) * (1 - target)).pow(self.gamma)
         
         # Compute cross-entropy loss
         ce_loss = F.cross_entropy(pred, target, reduction='none')
         
         # Apply focal weight
+        focal_weight = focal_weight.detach()
         loss = ce_loss * focal_weight.sum(dim=1)
         
         loss = loss * self.loss_weight

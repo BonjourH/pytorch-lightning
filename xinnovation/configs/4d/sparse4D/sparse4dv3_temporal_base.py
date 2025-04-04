@@ -71,20 +71,22 @@ lightning_module = dict(
             type="FocalLoss",
             alpha=0.25,
             gamma=2.0,
-            reduction="sum",
-            loss_weight=1.0
+            reduction="mean",
+            loss_weight=1.0,
+            pos_weight=[3.0]
         ),
         attribute_loss=dict(
             type="FocalLoss",
             alpha=[0.25 for _ in range(num_classes - 1)],
             gamma=2.0,
-            reduction="sum",
-            loss_weight=0.2
+            reduction="mean",
+            loss_weight=0.2,
+            pos_weight=[1.0 for _ in range(num_classes - 1)]
         ),
         regression_loss=dict(
             type="SmoothL1Loss",
             beta=1.0,
-            reduction="sum",
+            reduction="mean",
             loss_weight=1.0
         ),
     ),
