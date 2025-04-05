@@ -28,30 +28,8 @@ class SmoothL1Loss(nn.Module):
         self.loss_weight = loss_weight
     
     def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        """
-        Forward function of SmoothL1Loss.
-        
-        Args:
-            pred (torch.Tensor): Predictions of bbox regression.
-                Shape: (B, 4) or (B, N, 4).
-            target (torch.Tensor): Target of bbox regression.
-                Shape: (B, 4) or (B, N, 4).
-                
-        Returns:
-            torch.Tensor: Calculated loss
-        """
         assert pred.size() == target.size()
-        diff = torch.abs(pred - target)
-        loss = torch.where(diff < self.beta, 
-                          0.5 * diff * diff / self.beta,
-                          diff - 0.5 * self.beta)
-        
-        if self.reduction == 'mean':
-            loss = loss.mean()
-        elif self.reduction == 'sum':
-            loss = loss.sum()
-        
-        return loss * self.loss_weight
+        return F.smooth_l1_loss(pred, target, beta=self.beta, reduction=self.reduction) * self.loss_weight
 
 
 @LOSSES.register_module()

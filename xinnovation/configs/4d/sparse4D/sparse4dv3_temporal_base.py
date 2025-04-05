@@ -54,42 +54,6 @@ def fpn_neck(in_channels: List[int]=[256, 512, 1024]):
 
 lightning_module = dict(
     type="Sparse4DModule",
-    scheduler=dict(
-        type="StepLRScheduler",
-        step_size=10,
-        gamma=0.1
-    ),
-    optimizer=dict(
-        type="AdamWOptimizer",
-        lr=0.001,
-        weight_decay=0.0001
-    ),
-    loss=dict(
-        type="Sparse4DLossWithDAC",
-        layer_loss_weights=[0.5, 0.6, 0.6, 0.7, 0.7, 0.8, 0.9],
-        has_object_loss=dict(
-            type="FocalLoss",
-            alpha=0.25,
-            gamma=2.0,
-            reduction="mean",
-            loss_weight=1.0,
-            pos_weight=[3.0]
-        ),
-        attribute_loss=dict(
-            type="FocalLoss",
-            alpha=[0.25 for _ in range(num_classes - 1)],
-            gamma=2.0,
-            reduction="mean",
-            loss_weight=0.2,
-            pos_weight=[1.0 for _ in range(num_classes - 1)]
-        ),
-        regression_loss=dict(
-            type="SmoothL1Loss",
-            beta=1.0,
-            reduction="mean",
-            loss_weight=1.0
-        ),
-    ),
     detector=dict(
         type="Sparse4DDetector",
         camera_groups=dict(
@@ -197,13 +161,49 @@ lightning_module = dict(
             post_norm=None
         ) if use_temp_attention else None
     ),
+    scheduler=dict(
+        type="StepLRScheduler",
+        step_size=10,
+        gamma=0.1
+    ),
+    optimizer=dict(
+        type="AdamWOptimizer",
+        lr=0.001,
+        weight_decay=0.0001
+    ),
+    loss=dict(
+        type="Sparse4DLossWithDAC",
+        layer_loss_weights=[0.5, 0.6, 0.6, 0.7, 0.7, 0.8, 0.9],
+        has_object_loss=dict(
+            type="FocalLoss",
+            alpha=0.25,
+            gamma=2.0,
+            reduction="mean",
+            loss_weight=1.0,
+            pos_weight=[5.0]
+        ),
+        attribute_loss=dict(
+            type="FocalLoss",
+            alpha=[0.25 for _ in range(num_classes - 1)],
+            gamma=2.0,
+            reduction="mean",
+            loss_weight=0.2,
+            pos_weight=[1.0 for _ in range(num_classes - 1)]
+        ),
+        regression_loss=dict(
+            type="SmoothL1Loss",
+            beta=1.0,
+            reduction="mean",
+            loss_weight=1.0
+        ),
+    ),
     debug_config = dict(
         visualize_intermediate_results=True,
         visualize_intermediate_results_dir="/home/xinjian/Code/pytorch-lightning/visualize_intermediate_results",
         render_gt_trajs=True,
         render_init_trajs=False,
         render_pred_trajs=True,
-        pred_traj_threshold=0.3,
+        pred_traj_threshold=0.25,
         render_trajs_interval=2, # every 10 epochs
         gt_color=[0.0, 255.0, 0.0],
         init_color=[0.0, 0.0, 255.0],
