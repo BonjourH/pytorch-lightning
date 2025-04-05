@@ -155,47 +155,19 @@ class Sparse4DModule(LightningDetector):
         with open(config_path, 'w') as f:
             json.dump(self.hparams, f, indent=2)
 
-    def _save_matching_history(self):
+    def _visualize_matching_results(self):
         """Save the matching history."""
         print("Visualizing matching history...")
         # 获取匹配历史记录
-        matching_history = self.criterion.matching_history
+        matching_history = self.criterion.matching_history 
+        # layer_idx -> epoch_idx -> batch_idx -> Tuple[np.ndarray, np.ndarray]
         
         if not matching_history:
             print("No matching history to visualize.")
             return
         
-        # 创建保存可视化结果的目录
-        vis_dir = os.path.join(self.debug_config.log_dir, "matching_visualization")
+        vis_dir = os.path.join(self.debug_config.visualize_intermediate_results_dir, "query_assignment_changes")
         os.makedirs(vis_dir, exist_ok=True)
-        
-        # matching_history的结构是 Dict[int, List[Tuple[int, int]]]
-        # 键是layer_idx，值是(pred_idx, gt_idx)匹配对列表
-        # 注意：pred_idx和gt_idx可能是numpy数组而不是简单的整数
-        
-        # 首先保存原始匹配历史数据为CSV和JSON格式
-        for layer_idx, matches in matching_history.items():
-            # 保存为CSV
-            csv_path = os.path.join(vis_dir, f'layer_{layer_idx}_matches.csv')
-            with open(csv_path, 'w') as f:
-                f.write("step,pred_idx,gt_idx\n")
-                for step, match_pair in enumerate(matches):
-                    pred_idx, gt_idx = match_pair
-                    f.write(f"{step},{pred_idx},{gt_idx}\n")
-            
-            # 保存为JSON
-            json_path = os.path.join(vis_dir, f'layer_{layer_idx}_matches.json')
-            with open(json_path, 'w') as f:
-                serializable_matches = []
-                for match_pair in matches:
-                    pred_idx, gt_idx = match_pair
-                    # 处理numpy数组 - 转换为列表
-                    if hasattr(pred_idx, 'tolist'):
-                        pred_idx = pred_idx.tolist()
-                    if hasattr(gt_idx, 'tolist'):
-                        gt_idx = gt_idx.tolist()
-                    serializable_matches.append([pred_idx, gt_idx])
-                json.dump(serializable_matches, f, indent=2)
         
         # 获取所有层索引
         layer_indices = sorted(matching_history.keys())
@@ -204,49 +176,42 @@ class Sparse4DModule(LightningDetector):
         # 对每个层创建折线图可视化
         for layer_idx in layer_indices:
             # 获取该层的所有匹配记录
-            matches = matching_history[layer_idx]
-            print(f"Layer {layer_idx}: Found {len(matches)} match records")
+            layer_matches = matching_history[layer_idx]
+            print(f"Layer {layer_idx}: Found {len(layer_matches)} epochs of match records")
             
-            # 创建折线图
-            plt.figure(figsize=(14, 8))
+            # 收集每个batch的匹配信息
+            batch_gt_to_query = {}  # batch_idx -> List[np.ndarray], pred indices of each gt
             
-            # 收集每个GT索引的匹配信息
-            gt_to_query_over_time = {}
-            
-            for step, (pred_idx, gt_idx) in enumerate(matches):
-                gt_idx = gt_idx.tolist()
-                pred_idx = pred_idx.tolist()
-                for gt_idx_i, pred_idx_i in zip(gt_idx, pred_idx):
-                    # 将匹配添加到对应GT的历史记录中
-                    if gt_idx_i not in gt_to_query_over_time:
-                        gt_to_query_over_time[gt_idx_i] = []
-                    
-                    gt_to_query_over_time[gt_idx_i].append(pred_idx_i)
-            
-            # 使用不同颜色绘制每个GT索引的匹配轨迹
-            colors = plt.cm.rainbow(np.linspace(0, 1, len(gt_to_query_over_time)))
-            color_idx = 0
-            
-            for gt_idx, query_over_time in gt_to_query_over_time.items():
-                steps = range(len(query_over_time))
+            # Process matches for each epoch
+            for _, epoch_matches in enumerate(layer_matches): # List[List[Tuple[np.ndarray, np.ndarray]]]
+                for batch_idx, batch_matches in enumerate(epoch_matches): # List[Tuple[np.ndarray, np.ndarray]]
+                    if batch_idx not in batch_gt_to_query:
+                        batch_gt_to_query[batch_idx] = []
+                    batch_gt_to_query[batch_idx].append(batch_matches[1])
+            epochs = list(range(len(layer_matches)))
+            for batch_idx, pred_indices in batch_gt_to_query.items():
+                ys = np.stack(pred_indices, axis=0).T # shape: [num_gt, num_epoch]
+                plt.figure(figsize=(14, 8))
                 
-                plt.plot(steps, query_over_time, 'o-', linewidth=1.5, 
-                        label=f'GT {gt_idx}', 
-                        color=colors[color_idx % len(colors)],
-                        markersize=4)
-                color_idx += 1
-            
-            plt.grid(True)
-            plt.xlabel('Training Step', fontsize=12)
-            plt.ylabel('Matched Query Index', fontsize=12)
-            plt.title(f'Query Assignment Changes Over Training (Layer {layer_idx})', 
-                      fontsize=14, fontweight='bold')
-            
-            # 保存图像
-            plt.legend(bbox_to_anchor=(1.02, 1), loc='upper right')
-            plt.tight_layout()
-            plt.savefig(os.path.join(vis_dir, f'layer_{layer_idx}_matching_lines.png'), dpi=300)
-            plt.close()
+                # Create color map for different GT indices
+                colors = plt.cm.rainbow(np.linspace(0, 1, ys.shape[0]))
+                
+                for i in range(ys.shape[0]):
+                    plt.plot(epochs, ys[i], 'o-', linewidth=1.5,
+                            label=f'GT {i}',
+                            color=colors[i],
+                            markersize=4)
+                plt.grid(True)
+                plt.xlabel('Training Epoch', fontsize=12)
+                plt.ylabel('Matched Query Index', fontsize=12)
+                plt.title(f'Query Assignment Changes Over Training\n(Layer {layer_idx}, Batch {batch_idx})', 
+                          fontsize=14, fontweight='bold')
+                plt.legend()
+                plt.tight_layout()
+                save_path = os.path.join(vis_dir, f'layer_{layer_idx}_batch_{batch_idx}_matching.png')
+                plt.savefig(save_path, dpi=300)
+                plt.close()
+                print(f"Saved matching visualization for Layer {layer_idx}, Batch {batch_idx}")
         
         print(f"Matching visualization completed. Results saved to {vis_dir}")
 
@@ -293,7 +258,7 @@ class Sparse4DModule(LightningDetector):
 
     def on_train_end(self):
         """On train end, visualize the matching history."""
-        self._save_matching_history()
+        self._visualize_matching_results()
         self._generate_pred_trajs_video(mode="train")
         self._generate_pred_trajs_video(mode="val")
         
@@ -367,7 +332,7 @@ class Sparse4DModule(LightningDetector):
         
         self.save_intermediate_results(batch, batch_idx, outputs[-1], mode="train")
         # Compute loss
-        loss_dict = self.criterion(batch['trajs'], outputs, c_outputs)
+        loss_dict = self.criterion(batch['trajs'], outputs, c_outputs, step_idx=batch_idx)
         
         # # Log losses
         for name, value in loss_dict.items():
@@ -383,7 +348,7 @@ class Sparse4DModule(LightningDetector):
         self.save_intermediate_results(batch, batch_idx, outputs[-1], mode="val")
         
         # Compute loss
-        loss_dict = self.criterion(batch['trajs'], outputs, c_outputs)
+        loss_dict = self.criterion(batch['trajs'], outputs, c_outputs, step_idx=-1) # don't save matching history for validation
         
         # Store outputs for epoch end
         self.val_step_outputs.append({

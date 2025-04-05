@@ -61,7 +61,7 @@ class AnchorEncoder(nn.Module):
     def _generate_init_trajs(self) -> torch.Tensor:
         self.anchors = self.anchor_generator.get_anchors() # [N, 6] x, y, z, length, width, height
         print(f"total anchors: {self.anchors.shape[0]}")
-        self.anchor_generator.save_bev_anchor_fig(os.getcwd())
+        self.anchor_generator.save_bev_anchor_fig("/tmp")
         # self.init_trajs = torch.zeros(self.anchors.shape[0], TrajParamIndex.END_OF_INDEX)
         self.init_trajs = torch.zeros(self.anchors.shape[0], TrajParamIndex.END_OF_INDEX)
         self.init_trajs[:, TrajParamIndex.X:TrajParamIndex.Z + 1] = self.anchors[:, :3]
