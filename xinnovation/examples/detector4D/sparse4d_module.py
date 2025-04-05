@@ -16,6 +16,7 @@ import matplotlib.pyplot as plt
 import json
 import os
 import glob
+import shutil
 
 
 __all__ = ["Sparse4DModule"]
@@ -48,7 +49,8 @@ class Sparse4DModule(LightningDetector):
                       calibrations: torch.Tensor,
                       ego_states: torch.Tensor, 
                       imgs_dict: Dict[SourceCameraId, torch.Tensor], 
-                      color: torch.Tensor=torch.tensor([255.0, 0.0, 0.0])) -> Tuple[Dict[SourceCameraId, torch.Tensor], Dict[SourceCameraId, np.ndarray]]:
+                      color: torch.Tensor,
+                      matched_indices: List[Tuple[np.ndarray, np.ndarray]]=None) -> Tuple[Dict[SourceCameraId, torch.Tensor], Dict[SourceCameraId, np.ndarray]]:
         """
         Render trajectories on images.
         Args:
@@ -69,6 +71,16 @@ class Sparse4DModule(LightningDetector):
         
         # disable pixels of false positive trajectories
         traj_fp_mask = trajs[..., TrajParamIndex.HAS_OBJECT].sigmoid() < self.debug_config.pred_traj_threshold # [B, N]
+
+        if matched_indices is not None:
+            traj_fp_mask = torch.ones_like(traj_fp_mask)
+
+            batch_index = [torch.tensor([ib for _ in range(len(match[0]))]) for ib, match in enumerate(matched_indices)]
+            batch_index = torch.cat(batch_index, dim=0)
+            query_index = torch.cat([torch.tensor(match[1]) for match in matched_indices], dim=0)
+            
+            traj_fp_mask[batch_index, query_index] = 0
+
         traj_fp_mask = traj_fp_mask.unsqueeze(1).unsqueeze(3).unsqueeze(4).expand(-1, T, -1, C, P)
         pixels[traj_fp_mask, :] = -1
 
@@ -228,7 +240,7 @@ class Sparse4DModule(LightningDetector):
         img_files = glob.glob(os.path.join(trajs_dir, "*.png"))
         epoch_interval = self.debug_config.render_trajs_interval if mode == "train" else 1
 
-        for camera_id in CAMERA_ID_LIST:
+        for camera_id in self.debug_config.visualize_camera_list:
             camera_name = camera_id.name
             camera_img_files = [file for file in img_files if camera_name in file]
             camera_img_files.sort()
@@ -253,14 +265,128 @@ class Sparse4DModule(LightningDetector):
             os.system(ffmpeg_cmd)
             
             # Clean up temporary directory
-            import shutil
             shutil.rmtree(temp_dir)
+        shutil.rmtree(trajs_dir)
+        print("Predicted trajectories video generation completed")
+    
+    def _generate_matched_trajs_video(self, mode: str="train"):
+        if not self.debug_config.visualize_intermediate_results:
+            return
+        print("Generating the video of the matched trajectories...")
+        trajs_dir = os.path.join(self.debug_config.visualize_intermediate_results_dir, "matched_trajs")
+        if not os.path.exists(trajs_dir):
+            print(f"No matched trajectories to visualize")
+            return
+        
+        # Get all image files
+        img_files = glob.glob(os.path.join(trajs_dir, "*.png"))
+        if not img_files:
+            print("No image files found")
+            return
+            
+        # Helper function to extract epoch and layer from filename
+        def get_epoch_layer(filename):
+            # Format: "FRONT_CENTER_CAMERA_00000_0.png"
+            base = os.path.basename(filename)
+            parts = base.split('_')
+            # The last two parts are epoch and layer
+            epoch_str = parts[-2]  # "00000"
+            layer_str = parts[-1].split('.')[0]  # "0" (remove .png)
+            return int(epoch_str), int(layer_str)
+            
+        # Group files by camera and layer
+        camera_layer_files = {}  # (camera_name, layer_idx) -> files
+        camera_files = {}  # camera_name -> files (all layers)
+        
+        for camera_id in self.debug_config.visualize_camera_list:
+            camera_name = camera_id.name
+            camera_files[camera_name] = []
+            
+            # Get all files for this camera
+            camera_img_files = [f for f in img_files if camera_name in f]
+            if not camera_img_files:
+                continue
+                
+            # Group by layer
+            for layer_idx in range(6):
+                layer_files = [f for f in camera_img_files if f"_{layer_idx}.png" in f]
+                if layer_files:
+                    # Sort layer files by epoch
+                    layer_files.sort(key=lambda x: get_epoch_layer(x)[0])  # sort by epoch number
+                    key = (camera_name, layer_idx)
+                    camera_layer_files[key] = layer_files
+                    
+            # Sort all camera files by epoch and layer
+            camera_files[camera_name] = sorted(camera_img_files, key=lambda x: get_epoch_layer(x))
+        
+        # 1. Generate per-layer videos (original logic)
+        print("Generating per-layer videos...")
+        for (camera_name, layer_idx), files in camera_layer_files.items():
+            print(f"Processing camera {camera_name}, layer {layer_idx}")
+            
+            # Create temporary directory for frames
+            temp_dir = os.path.join(trajs_dir, f"temp_{camera_name}_layer_{layer_idx}")
+            os.makedirs(temp_dir, exist_ok=True)
+            
+            try:
+                # Copy and rename frames sequentially
+                for i, img_file in enumerate(files):
+                    frame_path = os.path.join(temp_dir, f"frame_{i:04d}.png")
+                    shutil.copy2(img_file, frame_path)
+                
+                # Generate video using ffmpeg
+                video_name = f"matched_trajs_{camera_name}_layer_{layer_idx}.mp4"
+                video_path = os.path.join(self.debug_config.visualize_intermediate_results_dir, video_name)
+                
+                ffmpeg_cmd = f"ffmpeg -y -framerate 10 -i {temp_dir}/frame_%04d.png -c:v libx264 -pix_fmt yuv420p {video_path}"
+                os.system(ffmpeg_cmd)
+                print(f"Generated layer video: {video_path}")
+                
+            finally:
+                # Clean up temporary directory
+                if os.path.exists(temp_dir):
+                    shutil.rmtree(temp_dir)
+        
+        # 2. Generate combined videos (all layers per camera)
+        print("\nGenerating combined-layer videos...")
+        for camera_name, files in camera_files.items():
+            if not files:
+                continue
+                
+            print(f"Processing camera {camera_name} (all layers)")
+            
+            # Create temporary directory for frames
+            temp_dir = os.path.join(trajs_dir, f"temp_{camera_name}_combined")
+            os.makedirs(temp_dir, exist_ok=True)
+            
+            try:
+                # Copy and rename frames sequentially
+                for i, img_file in enumerate(files):
+                    frame_path = os.path.join(temp_dir, f"frame_{i:04d}.png")
+                    shutil.copy2(img_file, frame_path)
+                
+                # Generate video using ffmpeg
+                video_name = f"matched_trajs_{camera_name}_combined.mp4"
+                video_path = os.path.join(self.debug_config.visualize_intermediate_results_dir, video_name)
+                
+                ffmpeg_cmd = f"ffmpeg -y -framerate 10 -i {temp_dir}/frame_%04d.png -c:v libx264 -pix_fmt yuv420p {video_path}"
+                os.system(ffmpeg_cmd)
+                print(f"Generated combined video: {video_path}")
+                
+            finally:
+                # Clean up temporary directory
+                if os.path.exists(temp_dir):
+                    shutil.rmtree(temp_dir)
+        
+        shutil.rmtree(trajs_dir)
+        print("Matched trajectories video generation completed")
 
     def on_train_end(self):
         """On train end, visualize the matching history."""
         self._visualize_matching_results()
         self._generate_pred_trajs_video(mode="train")
         self._generate_pred_trajs_video(mode="val")
+        self._generate_matched_trajs_video(mode="train")
         
     def on_validation_end(self):
         """On validation end, visualize the matching history."""
@@ -298,8 +424,11 @@ class Sparse4DModule(LightningDetector):
             return
         if mode == "train" and self.current_epoch % self.debug_config.render_trajs_interval != 0:
             return
+        
+        epoch_str = f"{self.current_epoch:05d}"
         # 1. read images
         imgs_dict = TrainingSample.read_seqeuntial_images_to_tensor(batch['image_paths'], self.device)
+
         # 2. render gt trajs
         if self.debug_config.render_gt_trajs:
             imgs_dict, concat_imgs = self._render_trajs_on_imgs(batch['trajs'], 
@@ -308,7 +437,43 @@ class Sparse4DModule(LightningDetector):
                                                     batch['ego_states'], 
                                                     imgs_dict,
                                                     color=torch.tensor(self.debug_config.gt_color))
-        # 3. visualize pred trajs
+            
+        # 3. render matched trajs
+        if self.debug_config.render_matched_trajs and mode == "train":
+            # only train mode stores the matching history
+            save_dir = os.path.join(self.debug_config.visualize_intermediate_results_dir, "matched_trajs")
+            os.makedirs(save_dir, exist_ok=True)
+
+            num_decoder_layers = len(self.detector.decoder_op_orders)
+            # Define colors for different layers using rainbow colormap
+            layer_colors = plt.cm.rainbow(np.linspace(0, 1, num_decoder_layers))  # 6 layers
+            layer_colors = (layer_colors[:, :3] * 255).astype(np.int32)  # Convert to RGB 0-255 format
+
+            for layer_idx in range(num_decoder_layers):
+                imgs_copy = imgs_dict.copy()
+                matched_indices = self.criterion.get_latest_matching_indices(layer_idx)
+                concat_imgs = self._render_trajs_on_imgs(trajs, 
+                                                    batch['camera_ids'],
+                                                    batch['calibrations'],
+                                                    batch['ego_states'], 
+                                                    imgs_copy,
+                                                    color=torch.tensor(layer_colors[layer_idx].tolist(), dtype=torch.float32),
+                                                    matched_indices=matched_indices)[1]
+                for camera_id in concat_imgs.keys():
+                    if camera_id not in self.debug_config.visualize_camera_list:
+                        continue
+                    img_name = f'{camera_id.name}_{epoch_str}_{layer_idx}.png'
+                    img = concat_imgs[camera_id]
+                    # Add color indicator in the corner
+                    color_box = np.zeros((30, 30, 3), dtype=np.uint8)
+                    color_box[:] = layer_colors[layer_idx]
+                    img[10:40, 10:40] = color_box
+                    cv2.putText(img, f"Epoch {self.current_epoch}, Layer {layer_idx}", (img.shape[1] // 2 - 100, 30), 
+                              cv2.FONT_HERSHEY_SIMPLEX, 1, layer_colors[layer_idx].tolist(), 2)
+                    cv2.imwrite(os.path.join(save_dir, img_name), img)
+
+        
+        # 4. visualize pred trajs
         if self.debug_config.render_pred_trajs:
             imgs_dict, concat_imgs = self._render_trajs_on_imgs(trajs, 
                                                     batch['camera_ids'],
@@ -317,11 +482,12 @@ class Sparse4DModule(LightningDetector):
                                                     imgs_dict,
                                                     color=torch.tensor(self.debug_config.pred_color))
         
-        # 4. save images
+        # 5. save images
         save_dir = os.path.join(self.debug_config.visualize_intermediate_results_dir, mode)
         os.makedirs(save_dir, exist_ok=True)
-        epoch_str = f"{self.current_epoch:05d}"
         for camera_id in concat_imgs.keys():
+            if camera_id not in self.debug_config.visualize_camera_list:
+                continue
             img_name = f'epoch_{epoch_str}_{camera_id.name}.png'
             cv2.imwrite(os.path.join(save_dir, img_name), concat_imgs[camera_id])
         
@@ -329,14 +495,13 @@ class Sparse4DModule(LightningDetector):
         """Training step."""
         # Forward pass
         outputs, c_outputs, quality = self(batch)
-        
-        self.save_intermediate_results(batch, batch_idx, outputs[-1], mode="train")
-        # Compute loss
         loss_dict = self.criterion(batch['trajs'], outputs, c_outputs, step_idx=batch_idx)
         
         # # Log losses
         for name, value in loss_dict.items():
             self.log(f"train/{name}", value, on_step=True, on_epoch=True, prog_bar=True, batch_size=batch['trajs'].shape[0])
+
+        self.save_intermediate_results(batch, batch_idx, outputs[-1], mode="train")
             
         return loss_dict
     
@@ -344,11 +509,10 @@ class Sparse4DModule(LightningDetector):
         """Validation step."""
         # Forward pass
         outputs, c_outputs, quality = self(batch)
-
-        self.save_intermediate_results(batch, batch_idx, outputs[-1], mode="val")
-        
         # Compute loss
         loss_dict = self.criterion(batch['trajs'], outputs, c_outputs, step_idx=-1) # don't save matching history for validation
+
+        self.save_intermediate_results(batch, batch_idx, outputs[-1], mode="val")
         
         # Store outputs for epoch end
         self.val_step_outputs.append({

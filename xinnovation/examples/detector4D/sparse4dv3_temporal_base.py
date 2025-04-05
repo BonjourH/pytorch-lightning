@@ -16,6 +16,8 @@ work_dir = "/home/xinjian/Code/pytorch-lightning"
 save_dir = f"{work_dir}/xinnovation_checkpoints"
 checkpoint_dir = f"{work_dir}/xinnovation_checkpoints"
 resume = False
+batch_size = 1
+devices = [0]
 
 # ============================== 1. Base Config ==============================
 
@@ -24,7 +26,7 @@ lightning_data_module = dict(
     type="Sparse4DDataModule",
     train_list=f"{work_dir}/train_clips.txt",
     val_list=f"{work_dir}/val_clips.txt",
-    batch_size=1,
+    batch_size=batch_size,
     num_workers=4,
     sequence_length=seq_length,
     shuffle=False,
@@ -200,10 +202,12 @@ lightning_module = dict(
     debug_config = dict(
         visualize_intermediate_results=True,
         visualize_intermediate_results_dir=f"{work_dir}/xinnovation_visualize_intermediate_results",
+        visualize_camera_list=[SourceCameraId.FRONT_LEFT_CAMERA],
         render_gt_trajs=True,
         render_init_trajs=False,
         render_pred_trajs=True,
-        pred_traj_threshold=0.25,
+        render_matched_trajs=True,
+        pred_traj_threshold=0.5,
         render_trajs_interval=2, # every 10 epochs
         gt_color=[0.0, 255.0, 0.0],
         init_color=[0.0, 0.0, 255.0],
@@ -218,7 +222,7 @@ lightning_module = dict(
 lightning_trainer = dict(
     type="LightningTrainer",
     # Training loop parameters
-    max_epochs=50,
+    max_epochs=100,
     min_epochs=None,
     max_steps=-1,
     min_steps=None,
@@ -238,7 +242,7 @@ lightning_trainer = dict(
     deterministic=True,
     # Acceleration parameters
     accelerator="gpu",
-    devices=[0],
+    devices=devices,
     num_nodes=1,
     precision="32",
     strategy="auto",

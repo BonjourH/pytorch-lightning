@@ -29,7 +29,7 @@ class Sparse4DLossWithDAC(nn.Module):
         # store matching history of the first batch of different layers
         self.layer_loss_weights = layer_loss_weights
         self.matching_history: Dict[int, List[List[Tuple[np.ndarray, np.ndarray]]]] = {} 
-        # layer_idx -> epoch_idx -> batch_idx -> Tuple[np.ndarray, np.ndarray](hungarian matching results)
+        # layer_idx -> epoch_idx -> List[Tuple[np.ndarray, np.ndarray](hungarian matching results)
         
         self.has_object_loss = LOSSES.build(has_object_loss)
         self.attribute_loss = LOSSES.build(attribute_loss)
@@ -45,8 +45,10 @@ class Sparse4DLossWithDAC(nn.Module):
     def reset_matching_history(self):
         self.matching_history = {}
 
-    def get_matching_indices(self, layer_idx: int, batch_idx: int, epoch_idx: int=-1) -> Tuple[np.ndarray, np.ndarray]:
-        return self.matching_history[layer_idx][epoch_idx][batch_idx]
+    def get_latest_matching_indices(self, layer_idx: int) -> List[Tuple[np.ndarray, np.ndarray]]:
+        if layer_idx not in self.matching_history:
+            return []
+        return self.matching_history[layer_idx][-1]
     
     @torch.no_grad()
     def _compute_hungarian_match_results(self, gt_trajs: torch.Tensor, pred_trajs: torch.Tensor, valid_gt_nbs: torch.Tensor) -> torch.Tensor:
