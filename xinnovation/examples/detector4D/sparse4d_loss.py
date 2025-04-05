@@ -33,6 +33,13 @@ class Sparse4DLossWithDAC(nn.Module):
         self.has_object_loss = LOSSES.build(has_object_loss)
         self.attribute_loss = LOSSES.build(attribute_loss)
         self.regression_loss = LOSSES.build(regression_loss)
+
+        self.epoch = 0
+
+    def update_epoch(self, epoch: int):
+        self.epoch = epoch
+        self.regression_cost_weight = max(0.5, np.exp(-self.epoch / 100) - 0.05)
+        self.cls_cost_weight = 1 - self.regression_cost_weight
     
     def reset_matching_history(self):
         self.matching_history = {}
@@ -75,7 +82,8 @@ class Sparse4DLossWithDAC(nn.Module):
         # 1.2 calculate the classification loss(only consider the attribute HAS_OBJECT)
         cls_cost = compute_has_object_cls_cost_matrix(gt_trajs, pred_trajs) # (B, M, N)
         # 1.4 calculate the composite loss
-        cost_matrix = cls_cost * 0.5 + regression_cost * 0.5
+        
+        cost_matrix = cls_cost * self.cls_cost_weight + regression_cost * self.regression_cost_weight
         # 2. calculate the indices
         indices = []
         for b in range(B):

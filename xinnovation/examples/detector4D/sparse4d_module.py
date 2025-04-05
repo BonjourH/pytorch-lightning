@@ -136,6 +136,10 @@ class Sparse4DModule(LightningDetector):
     def on_train_batch_start(self, batch, batch_idx):
         """On train batch start."""
         pass
+
+    def on_train_epoch_start(self):
+        """On train epoch start."""
+        self.criterion.update_epoch(self.current_epoch)
             
     def on_train_start(self):
         """On train start."""

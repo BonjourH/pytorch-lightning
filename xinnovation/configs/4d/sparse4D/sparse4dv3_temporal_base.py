@@ -256,7 +256,7 @@ lightning_trainer = dict(
     default_root_dir=save_dir,
     enable_model_summary=True,
     # Training loop parameters
-    max_epochs=200,
+    max_epochs=100,
     min_epochs=None,
     max_steps=-1,
     min_steps=None,
