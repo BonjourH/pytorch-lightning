@@ -8,7 +8,8 @@ from lightning.pytorch.strategies import Strategy
 from xinnovation.src.core.registry import TRAINER, CALLBACKS, LOGGERS
 from .callbacks import CheckpointCallback, EarlyStoppingCallback, LearningRateMonitorCallback, FilteredProgressBarCallback
 from .loggers import LightningTensorBoardLogger, LightningCSVLogger
-from .strategies import DDPStrategy
+from .strategies import LightningDDPStrategy
+from xinnovation.src.core.registry import STRATEGIES
 
 __all__ = ["LightningTrainer"]
 
@@ -64,6 +65,8 @@ class LightningTrainer(L.Trainer):
             继承了原始pl.Trainer的所有参数，请参考PyTorch Lightning文档
             **kwargs: 额外参数将传递给父类初始化方法
         """
+        if isinstance(strategy, dict):
+            strategy = STRATEGIES.build(strategy)
         # 调用父类初始化
         super().__init__(
             accelerator=accelerator,
