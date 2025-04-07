@@ -21,6 +21,7 @@ epochs = 200
 shuffle = True
 batch_size = 1
 devices = [0, 1, 2, 3, 4, 5, 6, 7]
+# devices = [0]
 
 # ============================== 1. Base Config ==============================
 
@@ -205,13 +206,13 @@ lightning_module = dict(
     debug_config = dict(
         visualize_intermediate_results=True,
         visualize_intermediate_results_dir=f"{work_dir}/xinnovation_visualize_intermediate_results",
-        visualize_camera_list=[SourceCameraId.FRONT_LEFT_CAMERA],
+        visualize_camera_list=[SourceCameraId.FRONT_LEFT_CAMERA, SourceCameraId.REAR_LEFT_CAMERA],
         render_gt_trajs=True,
         render_init_trajs=False,
         render_pred_trajs=True,
         render_matched_trajs=True,
         pred_traj_threshold=0.5,
-        render_trajs_interval=2, # every 10 epochs
+        render_trajs_interval=1, # every 10 epochs
         gt_color=[0.0, 255.0, 0.0],
         init_color=[0.0, 0.0, 255.0],
         pred_color=[255.0, 0.0, 0.0],
@@ -230,7 +231,7 @@ lightning_trainer = dict(
     max_steps=-1,
     min_steps=None,
     max_time=None,
-    limit_train_batches=1.0, # 1 for one epoch, 1.0 for all epochs
+    limit_train_batches=1, # 1 for one epoch, 1.0 for all epochs
     limit_val_batches=1,  
     limit_test_batches=1,
     limit_predict_batches=1,

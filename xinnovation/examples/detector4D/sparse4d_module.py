@@ -45,6 +45,7 @@ class Sparse4DModule(LightningDetector):
     
     def _render_trajs_on_imgs(self, 
                       trajs: torch.Tensor, 
+                      trajs_prob: torch.Tensor,
                       camera_ids: List[SourceCameraId],
                       calibrations: torch.Tensor,
                       ego_states: torch.Tensor, 
@@ -55,6 +56,7 @@ class Sparse4DModule(LightningDetector):
         Render trajectories on images.
         Args:
             trajs: [B, N, TrajParamIndex.END_OF_INDEX]
+            trajs_prob: [B, N]
             camera_ids: List[SourceCameraId]
             calibrations: torch.Tensor[B, C, CameraParamIndex.END_OF_INDEX]
             ego_states: torch.Tensor[B, T, EgoStateParamIndex.END_OF_INDEX]
@@ -70,7 +72,7 @@ class Sparse4DModule(LightningDetector):
         pixels = pixels.view(B, T, N, C, P, 2)
         
         # disable pixels of false positive trajectories
-        traj_fp_mask = trajs[..., TrajParamIndex.HAS_OBJECT].sigmoid() < self.debug_config.pred_traj_threshold # [B, N]
+        traj_fp_mask = trajs_prob < self.debug_config.pred_traj_threshold # [B, N]
 
         if matched_indices is not None:
             traj_fp_mask = torch.ones_like(traj_fp_mask)
@@ -398,7 +400,9 @@ class Sparse4DModule(LightningDetector):
         imgs_dict = TrainingSample.read_seqeuntial_images_to_tensor(batch['image_paths'], self.device)
         # 2. render init trajs
         init_trajs = self.detector.get_init_trajs(batch['ego_states'].shape[0])
+        init_trajs[..., TrajParamIndex.HAS_OBJECT] = 1.0
         imgs_dict, concat_imgs = self._render_trajs_on_imgs(init_trajs, 
+                                                init_trajs[..., TrajParamIndex.HAS_OBJECT],
                                                 batch['camera_ids'],
                                                 batch['calibrations'],
                                                 batch['ego_states'], 
@@ -432,6 +436,7 @@ class Sparse4DModule(LightningDetector):
         # 2. render gt trajs
         if self.debug_config.render_gt_trajs:
             imgs_dict, concat_imgs = self._render_trajs_on_imgs(batch['trajs'], 
+                                                    batch['trajs'][..., TrajParamIndex.HAS_OBJECT],
                                                     batch['camera_ids'],
                                                     batch['calibrations'],
                                                     batch['ego_states'], 
@@ -453,6 +458,7 @@ class Sparse4DModule(LightningDetector):
                 imgs_copy = imgs_dict.copy()
                 matched_indices = self.criterion.get_latest_matching_indices(layer_idx)
                 concat_imgs = self._render_trajs_on_imgs(trajs, 
+                                                    trajs[..., TrajParamIndex.HAS_OBJECT].sigmoid(),
                                                     batch['camera_ids'],
                                                     batch['calibrations'],
                                                     batch['ego_states'], 
@@ -476,6 +482,7 @@ class Sparse4DModule(LightningDetector):
         # 4. visualize pred trajs
         if self.debug_config.render_pred_trajs:
             imgs_dict, concat_imgs = self._render_trajs_on_imgs(trajs, 
+                                                    trajs[..., TrajParamIndex.HAS_OBJECT].sigmoid(),
                                                     batch['camera_ids'],
                                                     batch['calibrations'],
                                                     batch['ego_states'], 
