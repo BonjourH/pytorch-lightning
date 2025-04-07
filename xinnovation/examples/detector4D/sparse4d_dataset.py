@@ -204,6 +204,7 @@ class Sparse4DMultiFrameDataset(Dataset):
             valid_sample_num = max(0, len(ego_states) - self.sequence_length + 1)
             for start_idx in range(valid_sample_num):
                 sample = TrainingSample(calibrations)
+                exist_neg_traj = False
                 
                 # Get state for the last frame
                 last_ego_state = ego_states[start_idx + self.sequence_length - 1]
@@ -304,11 +305,17 @@ class Sparse4DMultiFrameDataset(Dataset):
                             traj[TrajParamIndex.OCCLUDED] = obj_data.get('occluded', 0.0)
                             # object type
                             traj[TrajParamIndex.object_type_to_index(obj_data.get('type', 'UNKNOWN'))] = 1.0
+                            # status
+                            if obj_data['status'] in ["FP", "FN"]:
+                                exist_neg_traj = True
+                                break
                             
                             trajs.append(traj)
                         assert len(trajs) <= MAX_TRAJ_NB, f"Number of trajectories exceeds MAX_TRAJ_NB: {len(trajs)}"
                         sample.trajs = torch.stack(trajs)
-                
+                    
+                if exist_neg_traj:
+                    continue
                 samples.append(sample)
             
             print(f"Clip {clip_dir} has {valid_sample_num} valid samples")
