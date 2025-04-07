@@ -18,7 +18,6 @@ import os
 import glob
 import shutil
 
-
 __all__ = ["Sparse4DModule"]
 
 @LIGHTNING_MODULE.register_module()
@@ -203,6 +202,7 @@ class Sparse4DModule(LightningDetector):
                         batch_gt_to_query[batch_idx] = []
                     batch_gt_to_query[batch_idx].append(batch_matches[1])
             epochs = list(range(len(layer_matches)))
+            # length = [p.size for p in pred_indices]
             for batch_idx, pred_indices in batch_gt_to_query.items():
                 ys = np.stack(pred_indices, axis=0).T # shape: [num_gt, num_epoch]
                 plt.figure(figsize=(14, 8))
@@ -229,19 +229,18 @@ class Sparse4DModule(LightningDetector):
         
         print(f"Matching visualization completed. Results saved to {vis_dir}")
 
-    def _generate_pred_trajs_video(self, mode: str="train"):
+    def _generate_pred_trajs_video(self):
         """Generate the video of the predicted trajectories."""
         if not self.debug_config.visualize_intermediate_results:
             return
         print("Generating the video of the predicted trajectories...")
-        trajs_dir = os.path.join(self.debug_config.visualize_intermediate_results_dir, mode)
+        trajs_dir = os.path.join(self.debug_config.visualize_intermediate_results_dir, "pred_trajs")
         if not os.path.exists(trajs_dir):
-            print(f"No predicted trajectories to visualize for {mode} mode")
+            print("No predicted trajectories to visualize")
             return
         
         img_files = glob.glob(os.path.join(trajs_dir, "*.png"))
-        epoch_interval = self.debug_config.render_trajs_interval if mode == "train" else 1
-
+        
         for camera_id in self.debug_config.visualize_camera_list:
             camera_name = camera_id.name
             camera_img_files = [file for file in img_files if camera_name in file]
@@ -257,13 +256,16 @@ class Sparse4DModule(LightningDetector):
                 if img is not None:
                     frame_path = os.path.join(temp_dir, f"frame_{i:04d}.png")
                     # plot "Epoch xxx" on the top middle of the image
-                    epoch = i * epoch_interval
-                    cv2.putText(img, f"Epoch {epoch}", (img.shape[1] // 2, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+                    cv2.putText(img, f"Epoch {self.current_epoch}", (img.shape[1] // 2, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
                     cv2.imwrite(frame_path, img)
             
+            video_path = os.path.join(self.debug_config.visualize_intermediate_results_dir, f"pred_trajs_{camera_name}.mp4")
+            
             # Use ffmpeg to create the video
-            video_path = os.path.join(self.debug_config.visualize_intermediate_results_dir, f"{mode}_{camera_name}.mp4")
+            
             ffmpeg_cmd = f"ffmpeg -y -framerate 10 -i {temp_dir}/frame_%04d.png -c:v libx264 -pix_fmt yuv420p {video_path}"
+            # ffmpeg_cmd = f"ffmpeg -y -framerate 10 -i {temp_dir}/frame_%04d.png -c:v libopenh264 -pix_fmt yuv420p {video_path}"
+            # ffmpeg_cmd = f"ffmpeg -y -framerate 10 -i {temp_dir}/frame_%04d.png -c:v mpeg4 -q:v 1 -pix_fmt yuv420p {video_path}"
             os.system(ffmpeg_cmd)
             
             # Clean up temporary directory
@@ -271,13 +273,14 @@ class Sparse4DModule(LightningDetector):
         shutil.rmtree(trajs_dir)
         print("Predicted trajectories video generation completed")
     
-    def _generate_matched_trajs_video(self, mode: str="train"):
+    def _generate_matched_trajs_video(self):
+        """Generate the video of the matched trajectories."""
         if not self.debug_config.visualize_intermediate_results:
             return
         print("Generating the video of the matched trajectories...")
         trajs_dir = os.path.join(self.debug_config.visualize_intermediate_results_dir, "matched_trajs")
         if not os.path.exists(trajs_dir):
-            print(f"No matched trajectories to visualize")
+            print("No matched trajectories to visualize")
             return
         
         # Get all image files
@@ -321,7 +324,7 @@ class Sparse4DModule(LightningDetector):
             # Sort all camera files by epoch and layer
             camera_files[camera_name] = sorted(camera_img_files, key=lambda x: get_epoch_layer(x))
         
-        # 1. Generate per-layer videos (original logic)
+        # 1. Generate per-layer videos
         print("Generating per-layer videos...")
         for (camera_name, layer_idx), files in camera_layer_files.items():
             print(f"Processing camera {camera_name}, layer {layer_idx}")
@@ -386,10 +389,9 @@ class Sparse4DModule(LightningDetector):
     def on_train_end(self):
         """On train end, visualize the matching history."""
         if self.global_rank == 0:
+            self._generate_pred_trajs_video()
+            self._generate_matched_trajs_video()
             self._visualize_matching_results()
-            self._generate_pred_trajs_video(mode="train")
-            self._generate_pred_trajs_video(mode="val")
-            self._generate_matched_trajs_video(mode="train")
         
     def on_validation_end(self):
         """On validation end, visualize the matching history."""
@@ -417,7 +419,7 @@ class Sparse4DModule(LightningDetector):
             img_name = f'Init_trajs_{camera_id.name}.png'
             cv2.imwrite(os.path.join(save_dir, img_name), concat_imgs[camera_id])
 
-    def save_intermediate_results(self, batch: Dict, batch_idx: int, trajs: torch.Tensor, mode: str="train"):
+    def save_intermediate_results(self, batch: Dict, batch_idx: int, trajs: torch.Tensor):
         """
         Save intermediate results for visualization, only save the first batch for training and validation.
         Args:
@@ -428,8 +430,6 @@ class Sparse4DModule(LightningDetector):
         if self.global_rank != 0:
             return
         if not (self.debug_config.visualize_intermediate_results and batch_idx == 0):
-            return
-        if mode == "train" and self.current_epoch % self.debug_config.render_trajs_interval != 0:
             return
         
         epoch_str = f"{self.current_epoch:05d}"
@@ -447,7 +447,7 @@ class Sparse4DModule(LightningDetector):
                                                     color=torch.tensor(self.debug_config.gt_color))
             
         # 3. render matched trajs
-        if self.debug_config.render_matched_trajs and mode == "train" and self.global_rank == 0:
+        if self.debug_config.render_matched_trajs:
             # only train mode stores the matching history
             save_dir = os.path.join(self.debug_config.visualize_intermediate_results_dir, "matched_trajs")
             os.makedirs(save_dir, exist_ok=True)
@@ -493,7 +493,7 @@ class Sparse4DModule(LightningDetector):
                                                     color=torch.tensor(self.debug_config.pred_color))
         
         # 5. save images
-        save_dir = os.path.join(self.debug_config.visualize_intermediate_results_dir, mode)
+        save_dir = os.path.join(self.debug_config.visualize_intermediate_results_dir, "pred_trajs")
         os.makedirs(save_dir, exist_ok=True)
         for camera_id in concat_imgs.keys():
             if camera_id not in self.debug_config.visualize_camera_list:
@@ -508,13 +508,11 @@ class Sparse4DModule(LightningDetector):
             exit()
         # Forward pass
         outputs, c_outputs, quality = self(batch)
-        loss_dict = self.criterion(batch['trajs'], outputs, c_outputs, step_idx=batch_idx)
+        loss_dict = self.criterion(batch['trajs'], outputs, c_outputs)
         
         # # Log losses
         for name, value in loss_dict.items():
-            self.log(f"train/{name}", value, on_step=True, on_epoch=True, prog_bar=True, batch_size=batch['trajs'].shape[0])
-
-        self.save_intermediate_results(batch, batch_idx, outputs[-1], mode="train")
+            self.log(f"train/{name}", value, on_step=True, on_epoch=True, prog_bar=True, batch_size=batch['trajs'].shape[0], sync_dist=True)
             
         return loss_dict
     
@@ -523,9 +521,9 @@ class Sparse4DModule(LightningDetector):
         # Forward pass
         outputs, c_outputs, quality = self(batch)
         # Compute loss
-        loss_dict = self.criterion(batch['trajs'], outputs, c_outputs, step_idx=-1) # don't save matching history for validation
+        loss_dict = self.criterion(batch['trajs'], outputs, c_outputs, batch_idx, "val") # don't save matching history for validation
 
-        self.save_intermediate_results(batch, batch_idx, outputs[-1], mode="val")
+        self.save_intermediate_results(batch, batch_idx, outputs[-1])
         
         # Store outputs for epoch end
         self.val_step_outputs.append({
@@ -536,7 +534,7 @@ class Sparse4DModule(LightningDetector):
         
         # Log losses
         for name, value in loss_dict.items():
-            self.log(f"val/{name}", value, on_step=False, on_epoch=True, prog_bar=True, batch_size=batch['trajs'].shape[0])
+            self.log(f"val/{name}", value, on_step=False, on_epoch=True, prog_bar=True, batch_size=batch['trajs'].shape[0], sync_dist=True)
         
         return loss_dict
     
@@ -583,7 +581,7 @@ class Sparse4DModule(LightningDetector):
         
         # Log metrics
         for name, value in metrics.items():
-            self.log(f"val/{name}", value, on_epoch=True)
+            self.log(f"val/{name}", value, on_epoch=True, sync_dist=True)
         
         # Clear outputs
         self.val_step_outputs.clear()

@@ -110,16 +110,18 @@ class Sparse4DLossWithDAC(nn.Module):
             indices.append((gt_idx, pred_idx))
         return indices
     
-    def _save_matching_history(self, layer_idx: int, indices: Tuple[np.ndarray, np.ndarray], step_idx: int):
-        if step_idx != 0:
-            return
+    def _save_matching_history(self, layer_idx: int, indices: Tuple[np.ndarray, np.ndarray]):
         # Only record the first batch in each epoch(And in this case we should set shuffle=False in dataloader)
         if layer_idx not in self.matching_history:
             self.matching_history[layer_idx] = []
         if len(indices) > 0:
             self.matching_history[layer_idx].append(indices) # only record the first batch of different layers
 
-    def forward(self, gt_trajs: torch.Tensor, outputs: List[torch.Tensor], c_outputs: List[torch.Tensor]=None, step_idx: int=0) -> Dict[str, torch.Tensor]:
+    def forward(self, gt_trajs: torch.Tensor, 
+                      outputs: List[torch.Tensor], 
+                      c_outputs: List[torch.Tensor]=None,
+                      step_idx: int = 0, 
+                      mode="train") -> Dict[str, torch.Tensor]:
         """
         Forward pass to compute losses.
         
@@ -142,7 +144,8 @@ class Sparse4DLossWithDAC(nn.Module):
         # 1. Add loss of standard decoders
         for layer_idx, pred_trajs in enumerate(outputs):
             indices = self._compute_hungarian_match_results(gt_trajs, pred_trajs, valid_gt_nbs)
-            self._save_matching_history(layer_idx, indices, step_idx)
+            if mode == "val" and step_idx == 0:
+                self._save_matching_history(layer_idx, indices)
             
             # 1.1 create matched mask and reordered gts
             matched_mask = torch.zeros(B, N, dtype=torch.bool, device=pred_trajs.device)
