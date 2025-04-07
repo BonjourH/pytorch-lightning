@@ -91,7 +91,7 @@ class AnchorEncoder(nn.Module):
         velocity_embed = self.velocity_embed_layer(trajs[:, :, TrajParamIndex.VX:TrajParamIndex.VY + 1])
         cat_embed = torch.cat([position_embed, dimension_embed, orientation_embed, velocity_embed], dim=-1)
         return self.fusion_layer(cat_embed)
-
+        
 
 def linear_relu_ln(output_dim, in_loops, out_loops, input_dim=None):
     if input_dim is None:
@@ -110,12 +110,14 @@ def linear_relu_ln(output_dim, in_loops, out_loops, input_dim=None):
 class TrajectoryRefiner(nn.Module):
     def __init__(self, query_dim: int,
                        hidden_dim: int,
+                       motion_range: Dict,
                        normalize_yaw: bool = False,
                        with_quality_estimation: bool = False):
         super().__init__()
         self.query_dim = query_dim
         self.normalize_yaw = normalize_yaw
         self.with_quality_estimation = with_quality_estimation
+        self.range_param = self.get_motion_range(motion_range)
 
 
         # regression part
@@ -143,6 +145,24 @@ class TrajectoryRefiner(nn.Module):
             )
             
         self.init_weights()
+    
+    def get_motion_range(self, mr: Dict):
+        param_range = torch.zeros(TrajParamIndex.HEIGHT + 1, 2)
+    
+        # Position ranges (in meters)
+        param_range[TrajParamIndex.X] = torch.tensor(mr['x'])
+        param_range[TrajParamIndex.Y] = torch.tensor(mr['y'])
+        param_range[TrajParamIndex.Z] = torch.tensor(mr['z'])
+        
+        # Velocity ranges (in m/s)
+        param_range[TrajParamIndex.VX] = torch.tensor(mr['vx'])
+        param_range[TrajParamIndex.VY] = torch.tensor(mr['vy'])
+        
+        # Acceleration ranges (in m/s^2)
+        param_range[TrajParamIndex.AX] = torch.tensor(mr['ax'])
+        param_range[TrajParamIndex.AY] = torch.tensor(mr['ay'])  
+        
+        return param_range
         
     def init_weights(self):
         """Initialize the weights of the network."""

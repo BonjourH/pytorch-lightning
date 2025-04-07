@@ -24,8 +24,13 @@ class Sparse4DLossWithDAC(nn.Module):
                     has_object_loss: dict,
                     attribute_loss: dict,
                     regression_loss: dict,
+                    xrel_range: List[float],
+                    yrel_range: List[float],
                     **kwargs):
         super().__init__()
+        self.xrel_range = xrel_range
+        self.yrel_range = yrel_range
+
         # store matching history of the first batch of different layers
         self.layer_loss_weights = layer_loss_weights
         self.matching_history: Dict[int, List[List[Tuple[np.ndarray, np.ndarray]]]] = {} 

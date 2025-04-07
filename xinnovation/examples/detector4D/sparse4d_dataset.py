@@ -102,11 +102,15 @@ class Sparse4DMultiFrameDataset(Dataset):
     """Dataset for multi-frame multi-camera perception."""
     def __init__(self, clip_dirs: List[str],
                        sequence_length: int,
-                       camera_groups: List[CameraGroupConfig]):
+                       camera_groups: List[CameraGroupConfig],
+                       xrel_range: List[float],
+                       yrel_range: List[float]):
         self.clip_dirs = clip_dirs
         self.camera_groups = camera_groups
         self.camera_ids = [cam_id for group in camera_groups for cam_id in group.camera_ids]
         self.sequence_length = sequence_length
+        self.xrel_range = xrel_range
+        self.yrel_range = yrel_range
         self.samples = self._build_samples()
         print(f"Total {len(self.samples)} samples")
 
@@ -311,8 +315,9 @@ class Sparse4DMultiFrameDataset(Dataset):
                                 break
                             
                             trajs.append(traj)
-                        assert len(trajs) <= MAX_TRAJ_NB, f"Number of trajectories exceeds MAX_TRAJ_NB: {len(trajs)}"
-                        sample.trajs = torch.stack(trajs)
+                        if not exist_neg_traj:
+                            assert len(trajs) <= MAX_TRAJ_NB, f"Number of trajectories exceeds MAX_TRAJ_NB: {len(trajs)}"
+                            sample.trajs = torch.stack(trajs)
                     
                 if exist_neg_traj:
                     continue

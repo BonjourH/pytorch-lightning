@@ -21,6 +21,8 @@ epochs = 200
 shuffle = True
 batch_size = 1
 devices = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+xrel_range = [-80.0, 250.0]
+yrel_range = [-10.0, 10.0]
 # devices = [0]
 
 # ============================== 1. Base Config ==============================
@@ -36,6 +38,8 @@ lightning_data_module = dict(
     shuffle=shuffle,
     persistent_workers=True,
     pin_memory=True,
+    xrel_range=xrel_range,
+    yrel_range=yrel_range,
     camera_groups=[CameraGroupConfig.front_stereo_camera_group(), CameraGroupConfig.short_focal_length_camera_group(), CameraGroupConfig.rear_camera_group()]
 )
 
@@ -158,6 +162,15 @@ lightning_module = dict(
             query_dim=query_dim,
             hidden_dim=query_dim,
             with_quality_estimation=with_quality_estimation,
+            motion_range=dict(
+                x=xrel_range,
+                y=yrel_range,
+                z=[-3.0, 5.0],
+                vx=[-40.0, 40.0],
+                vy=[-5.0, 5.0],
+                ax=[-5.0, 5.0],
+                ay=[-2.0, 2.0]
+            )
         ),
         temp_attention=dict(
             type="DecoupledMultiHeadAttention",
@@ -179,6 +192,8 @@ lightning_module = dict(
     ),
     loss=dict(
         type="Sparse4DLossWithDAC",
+        xrel_range=xrel_range,
+        yrel_range=yrel_range,
         layer_loss_weights=[0.5, 0.6, 0.6, 0.7, 0.7, 0.8, 0.9],
         has_object_loss=dict(
             type="FocalLoss",

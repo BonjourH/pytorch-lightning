@@ -21,7 +21,9 @@ class Sparse4DDataModule(L.LightningDataModule):
                  shuffle: bool,
                  persistent_workers: bool,
                  pin_memory: bool,
-                 camera_groups: List[CameraGroupConfig]):
+                 camera_groups: List[CameraGroupConfig],
+                 xrel_range: List[float],
+                 yrel_range: List[float]):
         super().__init__()
         self.save_hyperparameters()
         
@@ -58,13 +60,17 @@ class Sparse4DDataModule(L.LightningDataModule):
             self.train_dataset = Sparse4DMultiFrameDataset(
                 clip_dirs=train_clips,
                 sequence_length=self.hparams.sequence_length,
-                camera_groups=self.hparams.camera_groups
+                camera_groups=self.hparams.camera_groups,
+                xrel_range=self.hparams.xrel_range,
+                yrel_range=self.hparams.yrel_range
             )
             
             self.val_dataset = Sparse4DMultiFrameDataset(
                 clip_dirs=val_clips,
                 sequence_length=self.hparams.sequence_length,
-                camera_groups=self.hparams.camera_groups
+                camera_groups=self.hparams.camera_groups,
+                xrel_range=self.hparams.xrel_range,
+                yrel_range=self.hparams.yrel_range
             )
         
         elif stage == "validate":
@@ -76,7 +82,9 @@ class Sparse4DDataModule(L.LightningDataModule):
                 self.val_dataset = Sparse4DMultiFrameDataset(
                     clip_dirs=val_clips,
                     sequence_length=self.hparams.sequence_length,
-                    camera_groups=self.hparams.camera_groups
+                    camera_groups=self.hparams.camera_groups,
+                    xrel_range=self.hparams.xrel_range,
+                    yrel_range=self.hparams.yrel_range
                 )
         else:
             raise ValueError(f"Invalid stage: {stage}")
