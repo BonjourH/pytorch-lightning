@@ -77,8 +77,8 @@ lightning_module = dict(
                 type="Anchor3DGenerator",
                 front_type="div_x",
                 back_type="div_x",
-                front_params=dict(alpha=0.4, beta=10.0, order=2.0),
-                back_params=dict(alpha=0.35, beta=10.0, order=2.0),
+                front_params=dict(alpha=0.28, beta=20.0, order=1.5), # beta * torch.pow(x, order) / (alpha - x), x = idx * min_spacing / max_distance
+                back_params=dict(alpha=0.2, beta=20.0, order=1.5),
                 front_min_spacing=2.0,
                 front_max_distance=200.0,
                 back_min_spacing=2.0,

@@ -493,6 +493,9 @@ class Sparse4DModule(LightningDetector):
         
     def training_step(self, batch: Dict, batch_idx: int) -> Dict:
         """Training step."""
+        if self.debug_config.render_init_trajs:
+            self.visualize_init_trajs(batch)
+            exit()
         # Forward pass
         outputs, c_outputs, quality = self(batch)
         loss_dict = self.criterion(batch['trajs'], outputs, c_outputs, step_idx=batch_idx)
