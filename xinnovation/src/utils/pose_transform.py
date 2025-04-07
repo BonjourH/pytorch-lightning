@@ -294,7 +294,7 @@ def project_points_to_image(trajs: torch.Tensor,
     P = unit_points.shape[-1]
     
     # extract object size and generate points in object coordinates
-    dims = trajs[..., TrajParamIndex.LENGTH:TrajParamIndex.HEIGHT+1].unsqueeze(-1)  # [B, N, 3, 1]
+    dims = trajs[..., TrajParamIndex.LENGTH:TrajParamIndex.HEIGHT+1].exp().unsqueeze(-1)  # [B, N, 3, 1]
     object_points = unit_points * dims  # [B, N, 3, P]
     
     ones = torch.ones((B, N, 1, P)).to(object_points.device)
@@ -329,7 +329,7 @@ if __name__ == "__main__":
     calibrations = torch.randn(B, C, CameraParamIndex.END_OF_INDEX)
     ego_states = torch.randn(B, T, EgoStateIndex.END_OF_INDEX)
     unit_points = torch.randn(3, P)
-    dims = trajs[..., TrajParamIndex.LENGTH:TrajParamIndex.HEIGHT+1].unsqueeze(-1)  # [B, N, 3, 1]
+    dims = trajs[..., TrajParamIndex.LENGTH:TrajParamIndex.HEIGHT+1].exp().unsqueeze(-1)  # [B, N, 3, 1]
     object_points = unit_points * dims  # [B, N, 3, P]
     homogeneous_points = torch.cat([object_points, torch.ones((B, N, 1, P))], dim=-2)  # [B, N, 4, P]
     

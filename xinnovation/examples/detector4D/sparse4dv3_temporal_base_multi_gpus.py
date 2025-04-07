@@ -16,11 +16,11 @@ work_dir = "/home/xinjian.wang/pytorch-lightning"
 save_dir = f"{work_dir}/xinnovation_checkpoints"
 checkpoint_dir = f"{work_dir}/xinnovation_checkpoints"
 accumulate_grad_batches = 4
-resume = False
+resume = True
 epochs = 200
 shuffle = True
 batch_size = 1
-devices = [0, 1, 2, 3, 4, 5, 6, 7]
+devices = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
 # devices = [0]
 
 # ============================== 1. Base Config ==============================

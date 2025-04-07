@@ -295,9 +295,9 @@ class Sparse4DMultiFrameDataset(Dataset):
                             yaw = obj_data.get('yaw', 0.0)
                             traj[TrajParamIndex.COS_YAW] = np.cos(yaw)
                             traj[TrajParamIndex.SIN_YAW] = np.sin(yaw)
-                            traj[TrajParamIndex.LENGTH] = obj_data.get('length', 0.0)
-                            traj[TrajParamIndex.WIDTH] = obj_data.get('width', 0.0)
-                            traj[TrajParamIndex.HEIGHT] = obj_data.get('height', 0.0)
+                            traj[TrajParamIndex.LENGTH] = np.log(max(obj_data.get('length', 1e-6), 1e-6))
+                            traj[TrajParamIndex.WIDTH] = np.log(max(obj_data.get('width', 1e-6), 1e-6))
+                            traj[TrajParamIndex.HEIGHT] = np.log(max(obj_data.get('height', 1e-6), 1e-6))
                             # object attributes
                             traj[TrajParamIndex.HAS_OBJECT] = 1.0
                             traj[TrajParamIndex.STATIC] = obj_data.get('static', 0.0)
@@ -449,7 +449,7 @@ if __name__ == '__main__':
             print(f"\nFirst valid trajectory details:")
             print(f"  Position: ({first_traj[TrajParamIndex.X]:.2f}, {first_traj[TrajParamIndex.Y]:.2f}, {first_traj[TrajParamIndex.Z]:.2f})")
             print(f"  Velocity: ({first_traj[TrajParamIndex.VX]:.2f}, {first_traj[TrajParamIndex.VY]:.2f})")
-            print(f"  Dimensions: {first_traj[TrajParamIndex.LENGTH]:.2f} x {first_traj[TrajParamIndex.WIDTH]:.2f} x {first_traj[TrajParamIndex.HEIGHT]:.2f}")
+            print(f"  Dimensions: {np.exp(first_traj[TrajParamIndex.LENGTH]):.2f} x {np.exp(first_traj[TrajParamIndex.WIDTH]):.2f} x {np.exp(first_traj[TrajParamIndex.HEIGHT]):.2f}")
             print(f"  Yaw: {first_traj[TrajParamIndex.COS_YAW]:.2f}, {first_traj[TrajParamIndex.SIN_YAW]:.2f}")
             print(f"  Object type: {tensor_to_object_type(first_traj)}")
         
