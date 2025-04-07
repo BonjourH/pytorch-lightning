@@ -385,10 +385,11 @@ class Sparse4DModule(LightningDetector):
 
     def on_train_end(self):
         """On train end, visualize the matching history."""
-        self._visualize_matching_results()
-        self._generate_pred_trajs_video(mode="train")
-        self._generate_pred_trajs_video(mode="val")
-        self._generate_matched_trajs_video(mode="train")
+        if self.global_rank == 0:
+            self._visualize_matching_results()
+            self._generate_pred_trajs_video(mode="train")
+            self._generate_pred_trajs_video(mode="val")
+            self._generate_matched_trajs_video(mode="train")
         
     def on_validation_end(self):
         """On validation end, visualize the matching history."""
@@ -424,6 +425,8 @@ class Sparse4DModule(LightningDetector):
             batch_idx: int
             trajs: torch.Tensor, take the trajs of the last decoder layer
         """
+        if self.global_rank != 0:
+            return
         if not (self.debug_config.visualize_intermediate_results and batch_idx == 0):
             return
         if mode == "train" and self.current_epoch % self.debug_config.render_trajs_interval != 0:
@@ -444,7 +447,7 @@ class Sparse4DModule(LightningDetector):
                                                     color=torch.tensor(self.debug_config.gt_color))
             
         # 3. render matched trajs
-        if self.debug_config.render_matched_trajs and mode == "train":
+        if self.debug_config.render_matched_trajs and mode == "train" and self.global_rank == 0:
             # only train mode stores the matching history
             save_dir = os.path.join(self.debug_config.visualize_intermediate_results_dir, "matched_trajs")
             os.makedirs(save_dir, exist_ok=True)
