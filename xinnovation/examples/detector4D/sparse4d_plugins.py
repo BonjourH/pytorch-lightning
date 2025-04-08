@@ -3,6 +3,7 @@ from xinnovation.src.components.lightning_module.detectors.plugins import Anchor
 import torch
 import torch.nn as nn
 from xinnovation.src.core.dataclass import TrajParamIndex
+from xinnovation.src.utils.math_utils import inverse_sigmoid
 from typing import Dict
 import os
 import math
@@ -105,7 +106,6 @@ def linear_relu_ln(output_dim, in_loops, out_loops, input_dim=None):
         layers.append(nn.LayerNorm(output_dim))
     return layers
 
-
 @PLUGINS.register_module()
 class TrajectoryRefiner(nn.Module):
     def __init__(self, query_dim: int,
@@ -117,8 +117,7 @@ class TrajectoryRefiner(nn.Module):
         self.query_dim = query_dim
         self.normalize_yaw = normalize_yaw
         self.with_quality_estimation = with_quality_estimation
-        self.range_param = self.get_motion_range(motion_range)
-
+        self._register_motion_range(motion_range)
 
         # regression part
         # (X, Y, Z, VX, VY, AX, AY, YAW, COS_YAW, SIN_YAW, LOG(LENGTH), LOG(WIDTH), LOG(HEIGHT))
@@ -146,23 +145,14 @@ class TrajectoryRefiner(nn.Module):
             
         self.init_weights()
     
-    def get_motion_range(self, mr: Dict):
-        param_range = torch.zeros(TrajParamIndex.HEIGHT + 1, 2)
-    
-        # Position ranges (in meters)
-        param_range[TrajParamIndex.X] = torch.tensor(mr['x'])
-        param_range[TrajParamIndex.Y] = torch.tensor(mr['y'])
-        param_range[TrajParamIndex.Z] = torch.tensor(mr['z'])
-        
-        # Velocity ranges (in m/s)
-        param_range[TrajParamIndex.VX] = torch.tensor(mr['vx'])
-        param_range[TrajParamIndex.VY] = torch.tensor(mr['vy'])
-        
-        # Acceleration ranges (in m/s^2)
-        param_range[TrajParamIndex.AX] = torch.tensor(mr['ax'])
-        param_range[TrajParamIndex.AY] = torch.tensor(mr['ay'])  
-        
-        return param_range
+    def _register_motion_range(self, mr: Dict):
+        motion_mins = torch.tensor([mr['x'][0], mr['y'][0], mr['z'][0], mr['vx'][0], mr['vy'][0], mr['ax'][0], mr['ay'][0]])
+        motion_maxs = torch.tensor([mr['x'][1], mr['y'][1], mr['z'][1], mr['vx'][1], mr['vy'][1], mr['ax'][1], mr['ay'][1]])
+        motion_ranges = motion_maxs - motion_mins
+        self.register_buffer('motion_mins', motion_mins)
+        self.register_buffer('motion_ranges', motion_ranges)
+        self.register_buffer('log_dimension_mins', torch.log(torch.tensor([mr['length'][0], mr['width'][0], mr['height'][0]])))
+        self.register_buffer('log_dimension_maxs', torch.log(torch.tensor([mr['length'][1], mr['width'][1], mr['height'][1]])))
         
     def init_weights(self):
         """Initialize the weights of the network."""
@@ -170,6 +160,13 @@ class TrajectoryRefiner(nn.Module):
             if p.dim() > 1:
                 nn.init.xavier_normal_(p)
                 # nn.init.kaiming_normal_(p)
+                
+    def _clamp_trajs(self, trajs: torch.Tensor) -> torch.Tensor:
+        clamp_trajs = trajs.clone()
+        clamp_trajs[..., TrajParamIndex.LENGTH] = torch.clamp(trajs[..., TrajParamIndex.LENGTH], min=self.log_dimension_mins[0], max=self.log_dimension_maxs[0])
+        clamp_trajs[..., TrajParamIndex.WIDTH] = torch.clamp(trajs[..., TrajParamIndex.WIDTH], min=self.log_dimension_mins[1], max=self.log_dimension_maxs[1])
+        clamp_trajs[..., TrajParamIndex.HEIGHT] = torch.clamp(trajs[..., TrajParamIndex.HEIGHT], min=self.log_dimension_mins[2], max=self.log_dimension_maxs[2])
+        return clamp_trajs
 
     def forward(self, content_query: torch.Tensor, 
                       pos_query: torch.Tensor,
@@ -194,20 +191,31 @@ class TrajectoryRefiner(nn.Module):
         refined_trajs = trajs.clone()
         
         # 1. Do refinement for trajs regression part
+        # Update the motion x, y, z, vx, vy, ax, ay
+        reference = (refined_trajs[..., :TrajParamIndex.AY + 1] - self.motion_mins) / (self.motion_ranges)
+        reference = inverse_sigmoid(reference)
+        reg_out[..., :TrajParamIndex.AY + 1] += reference
+        reg_out[..., :TrajParamIndex.AY + 1] = reg_out[..., :TrajParamIndex.AY + 1].sigmoid()
+        refined_trajs[..., :TrajParamIndex.AY + 1] = reg_out[..., :TrajParamIndex.AY + 1] * self.motion_ranges + self.motion_mins
+        
+        # Update the rotation
         if self.normalize_yaw:
             reg_out[..., [TrajParamIndex.COS_YAW, TrajParamIndex.SIN_YAW]] = torch.nn.functional.normalize(
                 reg_out[..., [TrajParamIndex.COS_YAW, TrajParamIndex.SIN_YAW]], dim=-1
             )
-            
-        # Update the new tensor instead of the input
-        refined_trajs[..., :self.reg_dim] = reg_out + trajs[..., :self.reg_dim]
+        refined_trajs[..., TrajParamIndex.COS_YAW] = reg_out[..., TrajParamIndex.COS_YAW]
+        refined_trajs[..., TrajParamIndex.SIN_YAW] = reg_out[..., TrajParamIndex.SIN_YAW]
         
+        # Update the length, width, height
+        refined_trajs[..., TrajParamIndex.LENGTH:TrajParamIndex.HEIGHT + 1] += reg_out[..., TrajParamIndex.LENGTH:TrajParamIndex.HEIGHT + 1]
+        
+        clamped_trajs = self._clamp_trajs(refined_trajs)
         # TODO: the refined x could varies in a large range, for example we expect the refiner could
         # also refine x from 200 to 100, so it's better to find a way to normalize the x for better training.
         # For example we use the log(dimension) to remove the dimension difference. we want to deal with x
         # in a similar way.
         
         # 2. Set regression part for cls part
-        refined_trajs[..., -self.cls_dim:] = cls_out
+        clamped_trajs[..., -self.cls_dim:] = cls_out
         
-        return refined_trajs, quality_out
+        return clamped_trajs, quality_out

@@ -26,6 +26,7 @@ class Sparse4DLossWithDAC(nn.Module):
                     regression_loss: dict,
                     xrel_range: List[float],
                     yrel_range: List[float],
+                    use_normalized_motion_cost: bool = False,
                     **kwargs):
         super().__init__()
         self.xrel_range = xrel_range
@@ -40,6 +41,7 @@ class Sparse4DLossWithDAC(nn.Module):
         self.attribute_loss = LOSSES.build(attribute_loss)
         self.regression_loss = LOSSES.build(regression_loss)
 
+        self.use_normalized_motion_cost = use_normalized_motion_cost
         self.epoch = 0
 
     def update_epoch(self, epoch: int):
@@ -77,12 +79,13 @@ class Sparse4DLossWithDAC(nn.Module):
         # 1. calculate the cost matrix
         # 1.1 calculate the regression loss, of shape [B, M, N]
         center_cost = torch.cdist(gt_trajs[:, :, TrajParamIndex.X:TrajParamIndex.Z+1], pred_trajs[:, :, TrajParamIndex.X:TrajParamIndex.Z+1], p=1)
-        center_cost = 1 - torch.exp(-center_cost / 30) # (B, M, N)
-        velocity_cost = torch.cdist(gt_trajs[:, :, TrajParamIndex.VX:TrajParamIndex.VY+1], pred_trajs[:, :, TrajParamIndex.VX:TrajParamIndex.VY+1], p=2)
-        velocity_cost = 0.5 * (1 + torch.tanh(10 * (velocity_cost - 2))) # (B, M, N)
+        velocity_cost = torch.cdist(gt_trajs[:, :, TrajParamIndex.VX:TrajParamIndex.VY+1], pred_trajs[:, :, TrajParamIndex.VX:TrajParamIndex.VY+1], p=1)
         dimension_cost = torch.cdist(gt_trajs[:, :, TrajParamIndex.LENGTH:TrajParamIndex.HEIGHT+1], 
-                                     pred_trajs[:, :, TrajParamIndex.LENGTH:TrajParamIndex.HEIGHT+1], p=2)
-        dimension_cost = 0.5 * (1 + torch.tanh(10 * (dimension_cost - 2))) # (B, M, N)
+                                     pred_trajs[:, :, TrajParamIndex.LENGTH:TrajParamIndex.HEIGHT+1], p=1)
+        if self.use_normalized_motion_cost:
+            center_cost = 1 - torch.exp(-center_cost / 30) # (B, M, N)
+            velocity_cost = 0.5 * (1 + torch.tanh(10 * (velocity_cost - 2))) # (B, M, N)
+            dimension_cost = 0.5 * (1 + torch.tanh(10 * (dimension_cost - 2))) # (B, M, N)
         # giou_loss_matrix = 0 # TODO: define the giou loss in 4D space(two trajectories)
         regression_cost = center_cost * 0.7 + velocity_cost * 0.2 + dimension_cost * 0.1
 

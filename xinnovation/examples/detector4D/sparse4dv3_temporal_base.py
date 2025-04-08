@@ -224,11 +224,14 @@ lightning_module = dict(
             motion_range=dict(
                 x=xrel_range,
                 y=yrel_range,
-                z=[-3.0, 5.0],
-                vx=[-40.0, 40.0],
-                vy=[-5.0, 5.0],
-                ax=[-5.0, 5.0],
-                ay=[-2.0, 2.0]
+                z=[-2.0, 5.0],
+                vx=[-35.0, 35.0],
+                vy=[-2.0, 2.0],
+                ax=[-3.0, 3.0],
+                ay=[-1.0, 1.0],
+                length=[3.5, 25.0],
+                width=[1.8, 3.5],
+                height=[1.4, 5.0]
             )
         ),
         temp_attention=dict(
@@ -239,10 +242,15 @@ lightning_module = dict(
             post_norm=None
         ) if use_temp_attention else None
     ),
+    # scheduler=dict(
+    #     type="CosineAnnealingLRScheduler",
+    #     T_max=epochs,
+    #     eta_min=0.0001
+    # ),
     scheduler=dict(
-        type="CosineAnnealingLRScheduler",
-        T_max=epochs,
-        eta_min=0.0001
+        type="StepLRScheduler",
+        gamma=0.1,
+        step_size=10
     ),
     optimizer=dict(
         type="AdamWOptimizer",
