@@ -113,6 +113,10 @@ class Sparse4DMultiFrameDataset(Dataset):
         self.yrel_range = yrel_range
         self.samples = self._build_samples()
         print(f"Total {len(self.samples)} samples")
+        
+    def _in_range(self, x: float, y: float) -> bool:
+        """Check if the point is in the range."""
+        return self.xrel_range[0] <= x <= self.xrel_range[1] and self.yrel_range[0] <= y <= self.yrel_range[1]
 
     def _build_samples(self) -> List[TrainingSample]:
         """Build list of training samples from clips."""
@@ -290,14 +294,16 @@ class Sparse4DMultiFrameDataset(Dataset):
                         for obj_data in obstacle_labels[i]['obstacles']:
                             traj = torch.zeros(TrajParamIndex.END_OF_INDEX)
                             # motion parameters
-                            traj[TrajParamIndex.X] = obj_data.get('x', 0.0)
-                            traj[TrajParamIndex.Y] = obj_data.get('y', 0.0)
-                            traj[TrajParamIndex.Z] = obj_data.get('z', 0.0)
-                            traj[TrajParamIndex.VX] = obj_data.get('rel_vx', 0.0)
-                            traj[TrajParamIndex.VY] = obj_data.get('rel_vy', 0.0)
-                            traj[TrajParamIndex.AX] = obj_data.get('rel_ax', 0.0)
-                            traj[TrajParamIndex.AY] = obj_data.get('rel_ay', 0.0)
-                            yaw = obj_data.get('yaw', 0.0)
+                            traj[TrajParamIndex.X] = obj_data['x']
+                            traj[TrajParamIndex.Y] = obj_data['y']
+                            if not self._in_range(traj[TrajParamIndex.X], traj[TrajParamIndex.Y]):
+                                continue
+                            traj[TrajParamIndex.Z] = obj_data['z']
+                            traj[TrajParamIndex.VX] = obj_data['rel_vx']
+                            traj[TrajParamIndex.VY] = obj_data['rel_vy']
+                            traj[TrajParamIndex.AX] = obj_data['rel_ax']
+                            traj[TrajParamIndex.AY] = obj_data['rel_ay']
+                            yaw = obj_data['yaw']
                             traj[TrajParamIndex.COS_YAW] = np.cos(yaw)
                             traj[TrajParamIndex.SIN_YAW] = np.sin(yaw)
                             traj[TrajParamIndex.LENGTH] = np.log(max(obj_data.get('length', 1e-6), 1e-6))
@@ -315,11 +321,11 @@ class Sparse4DMultiFrameDataset(Dataset):
                                 break
                             
                             trajs.append(traj)
-                        if not exist_neg_traj:
+                        if not exist_neg_traj and len(trajs) > 0:
                             assert len(trajs) <= MAX_TRAJ_NB, f"Number of trajectories exceeds MAX_TRAJ_NB: {len(trajs)}"
                             sample.trajs = torch.stack(trajs)
                     
-                if exist_neg_traj:
+                if exist_neg_traj or sample.trajs is None:
                     continue
                 samples.append(sample)
             
