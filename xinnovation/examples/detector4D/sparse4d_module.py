@@ -37,7 +37,7 @@ class Sparse4DModule(LightningDetector):
         
         # for visualization
         if self.debug_config.visualize_intermediate_results:
-            self.register_buffer("bbox_edge_points", sample_bbox_edge_points(50))
+            self.register_buffer("bbox_edge_points", sample_bbox_edge_points(20))
         
     def forward(self, batch) -> List[Dict]:
         return self.detector(batch)

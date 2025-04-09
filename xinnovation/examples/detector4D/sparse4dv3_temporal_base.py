@@ -23,7 +23,7 @@ resume = False
 shuffle = False
 batch_size = 1
 devices = [0]
-xrel_range = [-80.0, 250.0]
+xrel_range = [-60.0, 125.0]
 yrel_range = [-10.0, 10.0]
 # devices = [0]
 

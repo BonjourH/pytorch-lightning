@@ -165,14 +165,20 @@ class Sparse4DLossWithDAC(nn.Module):
             layer_loss_weight = self.layer_loss_weights[layer_idx]
 
             # 1.2 calculate the has object classification loss for all the preds
-            obj_loss = self.has_object_loss(pred_trajs[:, :, TrajParamIndex.HAS_OBJECT].flatten(end_dim=1),
-                                            gt_trajs_reordered[:, :, TrajParamIndex.HAS_OBJECT].flatten(end_dim=1))
+            last_idx = TrajParamIndex.END_OF_INDEX if layer_idx > 0 else TrajParamIndex.HAS_OBJECT + 1
+            obj_loss = self.has_object_loss(pred_trajs[:, :, TrajParamIndex.HAS_OBJECT:last_idx].flatten(end_dim=1),
+                                            gt_trajs_reordered[:, :, TrajParamIndex.HAS_OBJECT:last_idx].flatten(end_dim=1))
             losses[f'layer_{layer_idx}_obj_loss'] = obj_loss * layer_loss_weight
             if num_positive_preds > 0:
                 # 1.3 calculate loss for positive preds
                 # from [B, N, TrajParamIndex.END_OF_INDEX] to [num_positive_preds, TrajParamIndex.END_OF_INDEX]
                 positive_preds = pred_trajs[matched_mask] 
                 positive_gts = gt_trajs_reordered[matched_mask]
+                if layer_idx == 0:
+                    # only apply the loss on positive preds
+                    obj_loss = self.has_object_loss(positive_preds[:, TrajParamIndex.HAS_OBJECT],
+                                                    positive_gts[:, TrajParamIndex.HAS_OBJECT])
+                    losses[f'layer_{layer_idx}_obj_loss'] = obj_loss * layer_loss_weight
                 # 1.3.1 calculate the other attribute classification loss for all the positive preds
                 # attribute_loss = self.attribute_loss(
                 #     positive_preds[:, TrajParamIndex.HAS_OBJECT + 1:],
