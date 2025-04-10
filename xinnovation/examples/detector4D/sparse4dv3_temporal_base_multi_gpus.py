@@ -283,8 +283,8 @@ lightning_module = dict(
         ),
     ),
     debug_config = dict(
-        visualize_intermediate_results=True,
-        visualize_intermediate_results_dir=f"{work_dir}/xinnovation_visualize_intermediate_results",
+        visualize_validation_results=True,
+        visualize_validation_results_dir=f"{work_dir}/xinnovation_visualize_validation_results",
         visualize_camera_list=[SourceCameraId.FRONT_LEFT_CAMERA, SourceCameraId.REAR_LEFT_CAMERA],
         render_gt_trajs=True,
         render_init_trajs=False,
