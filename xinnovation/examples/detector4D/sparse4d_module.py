@@ -3,7 +3,7 @@ import torch.nn as nn
 from typing import Dict, Optional, Union, Any, List, Tuple
 
 import lightning.pytorch as L
-from xinnovation.src.core import LIGHTNING_MODULE, SourceCameraId, TrajParamIndex
+from xinnovation.src.core import LIGHTNING_MODULE, SourceCameraId, TrajParamIndex, EgoStateIndex
 from xinnovation.src.components.lightning_module import LightningDetector
 from xinnovation.src.utils.math_utils import sample_bbox_edge_points
 from xinnovation.src.utils.pose_transform import project_points_to_image
@@ -128,6 +128,12 @@ class Sparse4DModule(LightningDetector):
             cimg = img_sequence.permute(0, 2, 1, 3, 4) # [B, H, T, W, 3]
             cimg = cimg.reshape(B * H, T * W, 3) # [B * H, T * W, 3]
             cimg = cimg.cpu().numpy() # [B * H, T * W, 3]
+            for ib in range(B):
+                for it in range(T):
+                    # debug_message = f"{camera_id.name}: {ego_states[ib, it, EgoStateIndex.TIMESTAMP]:.2f}"
+                    debug_message = f"{ego_states[ib, it, EgoStateIndex.TIMESTAMP]:.2f}"
+                    cv_color = color.cpu().numpy().tolist()
+                    cv2.putText(cimg[ib * H: (ib + 1) * H, it * W: (it + 1) * W], debug_message, (W // 2, 45), cv2.FONT_HERSHEY_SIMPLEX, 1, cv_color, 2)
             cimg = cimg.astype(np.uint8)
             concat_imgs[camera_id] = cimg
             

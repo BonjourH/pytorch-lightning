@@ -43,6 +43,7 @@ class MultiviewTemporalSpatialFeatureAggregator(nn.Module):
         self.learnable_points_range = learnable_points_range
         self.residual_mode = residual_mode
         self.sequence_length = sequence_length
+        self.temporal_weight_decay = temporal_weight_decay
         
         # Keypoints configuration
         self.register_buffer('unit_points', generate_bbox_corners_points(with_origin=True)) # [3, 9]
@@ -51,10 +52,7 @@ class MultiviewTemporalSpatialFeatureAggregator(nn.Module):
                 nn.Linear(query_dim, num_learnable_points * 3),
                 nn.Tanh()
             )
-        
-        # Keypoints weight
-        temporal_weights = torch.exp(-torch.linspace(0, 1, sequence_length) * temporal_weight_decay).flip(0)
-        self.register_buffer('temporal_weights', temporal_weights)
+
         # weight channel
         self.camera_nb = camera_nb
         self.fpn_levels = fpn_levels
@@ -91,7 +89,22 @@ class MultiviewTemporalSpatialFeatureAggregator(nn.Module):
         kpts_offsets = kpts_offsets.view(B, N, 3, -1)
         return kpts_offsets
     
-    def _generate_kpts_feature_weight(self, trajs: torch.Tensor, content_queries: torch.Tensor, pos_queries: Optional[torch.Tensor] = None) -> torch.Tensor:
+    @torch.no_grad()
+    def _generate_temporal_weights(self, ego_states: torch.Tensor) -> torch.Tensor:
+        """
+        Generate the temporal weights.
+        Args:
+            ego_states: Tensor[B, T, EgoStateIndex.END_OF_INDEX]
+        Returns:
+            temporal_weights: Tensor[B, T]
+        """
+        time_diffs = ego_states[...,EgoStateIndex.TIMESTAMP] - ego_states[:, -1, EgoStateIndex.TIMESTAMP] # [B, T]
+        # weight = exp(-time_diffs^2 / temporal_weight_decay)
+        temporal_weights = torch.exp(-torch.square(time_diffs) / self.temporal_weight_decay * 3)
+        temporal_weights = temporal_weights.to(ego_states.device)
+        return temporal_weights
+    
+    def _generate_kpts_feature_weight(self, trajs: torch.Tensor, content_queries: torch.Tensor, pos_queries: Optional[torch.Tensor] = None, ego_states: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Generate the weight for the features.
         
         Args:
@@ -107,7 +120,8 @@ class MultiviewTemporalSpatialFeatureAggregator(nn.Module):
         weights = self.feature_weights(queries) # [B, N, weight_channel]
         weights = weights.view(B, N, self.camera_nb, self.kpt_num, self.fpn_levels)
         weights = weights.unsqueeze(1) # [B, 1, N, P, N_cams, N_levels]
-        weights = weights * self.temporal_weights.view(1, -1, 1, 1, 1, 1) # [B, T, N, P, N_cams, N_levels]
+        temporal_weights = self._generate_temporal_weights(ego_states)
+        weights = weights * temporal_weights.view(B, -1, 1, 1, 1, 1) # [B, T, N, P, N_cams, N_levels]
         weights = weights.view(B * self.sequence_length, N, self.camera_nb, self.kpt_num, self.fpn_levels)
         return weights
     
@@ -166,7 +180,7 @@ class MultiviewTemporalSpatialFeatureAggregator(nn.Module):
         invalid_mask = (pixels[..., 0] < 0.0) # [B * T, N, N_cams, P]
         
         # 2. Generate the weights for fusing features
-        weights = self._generate_kpts_feature_weight(trajs, content_queries, pos_queries)
+        weights = self._generate_kpts_feature_weight(trajs, content_queries, pos_queries, ego_states)
         # weights: Tensor[B * T, N, N_cams, P, L]
         weights[invalid_mask] = 0.0
         

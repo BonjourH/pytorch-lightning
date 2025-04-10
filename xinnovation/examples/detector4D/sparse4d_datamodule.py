@@ -25,7 +25,9 @@ class Sparse4DDataModule(L.LightningDataModule):
                  pin_memory: bool,
                  camera_groups: List[CameraGroupConfig],
                  xrel_range: List[float],
-                 yrel_range: List[float]):
+                 yrel_range: List[float],
+                 sliding_window_size: int = 20,
+                 sliding_window_stride: int = 2):
         super().__init__()
         self.save_hyperparameters()
         
@@ -57,7 +59,9 @@ class Sparse4DDataModule(L.LightningDataModule):
             sequence_length=self.hparams.sequence_length,
             camera_groups=self.hparams.camera_groups,
             xrel_range=self.hparams.xrel_range,
-            yrel_range=self.hparams.yrel_range
+            yrel_range=self.hparams.yrel_range,
+            sliding_window_size=self.hparams.sliding_window_size,
+            sliding_window_stride=self.hparams.sliding_window_stride
         )
     
     def setup(self, stage: Optional[str] = None):

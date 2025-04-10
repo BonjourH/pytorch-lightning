@@ -6,6 +6,8 @@ from xinnovation.examples.detector4D.sparse4d_dataset import CameraGroupConfig
 # ============================== 1. Base Config ==============================
 query_dim = 256
 seq_length = 6
+sliding_window_size = 20
+sliding_window_stride = 2
 dropout = 0.1
 num_groups = 8
 num_decoder = 6
@@ -284,7 +286,7 @@ lightning_module = dict(
     ),
     debug_config = dict(
         visualize_validation_results=True,
-        visualize_validation_results_dir=f"{work_dir}/xinnovation_visualize_validation_results",
+        visualize_validation_results_dir=f"{work_dir}/xinnovation_validation_results",
         visualize_camera_list=[SourceCameraId.FRONT_LEFT_CAMERA, SourceCameraId.REAR_LEFT_CAMERA],
         render_gt_trajs=True,
         render_init_trajs=False,
@@ -297,7 +299,7 @@ lightning_module = dict(
         pred_color=[255.0, 0.0, 0.0],
         point_radius=1,
         log_dir=f"{save_dir}/logs/{exp_name}",
-        predict_dir=f"{save_dir}/predict/{exp_name}",
+        predict_dir=f"{work_dir}/xinnovation_predict_results",
     ),
 )
 

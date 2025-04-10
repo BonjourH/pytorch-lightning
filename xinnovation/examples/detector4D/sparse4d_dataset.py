@@ -104,14 +104,19 @@ class Sparse4DMultiFrameDataset(Dataset):
                        sequence_length: int,
                        camera_groups: List[CameraGroupConfig],
                        xrel_range: List[float],
-                       yrel_range: List[float]):
+                       yrel_range: List[float],
+                       sliding_window_size: int,
+                       sliding_window_stride: int):
         self.clip_dirs = clip_dirs
         self.camera_groups = camera_groups
         self.camera_ids = [cam_id for group in camera_groups for cam_id in group.camera_ids]
         self.sequence_length = sequence_length
+        self.sliding_window_size = sliding_window_size
+        self.sliding_window_stride = sliding_window_stride
         self.xrel_range = xrel_range
         self.yrel_range = yrel_range
         self.samples = self._build_samples()
+        
         print(f"Total {len(self.samples)} samples")
         
     def _in_range(self, x: float, y: float) -> bool:
@@ -123,6 +128,7 @@ class Sparse4DMultiFrameDataset(Dataset):
         samples = []
         
         for clip_dir in self.clip_dirs:
+            valid_sample_num = 0
             # 1. Load calibrations
             calibrations: Dict[SourceCameraId, torch.Tensor] = {}
             for camera_id in self.camera_ids:
@@ -208,14 +214,27 @@ class Sparse4DMultiFrameDataset(Dataset):
             assert len(ego_states) == len(obstacle_labels), \
                 f"ego_states and labels should have same length but got {len(ego_states)} and {len(obstacle_labels)}"
             
-            # Create samples with sliding window
-            valid_sample_num = max(0, len(ego_states) - self.sequence_length + 1)
-            for start_idx in range(valid_sample_num):
+            # Create samples with random frame intervals
+            clip_length = len(ego_states)
+            window_size = min(self.sliding_window_size, clip_length)
+            
+            max_start_idx = clip_length - window_size + 1
+            start_idx = 0
+            while start_idx < max_start_idx:
                 sample = TrainingSample(calibrations)
                 exist_neg_traj = False
                 
+                # Generate random frame indices within the window
+                window_end = min(start_idx + window_size, clip_length)
+                frame_indices = sorted(np.random.choice(
+                    np.arange(start_idx, window_end),
+                    size=self.sequence_length,
+                    replace=False
+                ))
+                start_idx += self.sliding_window_stride
+                
                 # Get state for the last frame
-                last_ego_state = ego_states[start_idx + self.sequence_length - 1]
+                last_ego_state = ego_states[frame_indices[-1]]
                 time_ref = float(last_ego_state['timestamp'])
                 
                 # calculate transformation from ego frame to global frame
@@ -230,7 +249,7 @@ class Sparse4DMultiFrameDataset(Dataset):
                 # yaw_ref = np.arctan2(2 * (qw * qz + qx * qy), 1 - 2 * (qy * qy + qz * qz))
                 
                 # Add frames to sample
-                for i in range(start_idx, start_idx + self.sequence_length):
+                for i in frame_indices:
                     timestamp = "{:.6f}".format(ego_states[i]['timestamp'])
                     
                     # Collect image paths
@@ -289,7 +308,7 @@ class Sparse4DMultiFrameDataset(Dataset):
                     sample.add_frame(img_paths, ego_state)
                     
                     # Add trajectory if it's the last frame
-                    if i == start_idx + self.sequence_length - 1:
+                    if i == frame_indices[-1]:
                         trajs = []
                         for obj_data in obstacle_labels[i]['obstacles']:
                             traj = torch.zeros(TrajParamIndex.END_OF_INDEX)
@@ -328,7 +347,7 @@ class Sparse4DMultiFrameDataset(Dataset):
                 if exist_neg_traj or sample.trajs is None:
                     continue
                 samples.append(sample)
-            
+                valid_sample_num += 1
             print(f"Clip {clip_dir} has {valid_sample_num} valid samples")
             
         return samples
