@@ -19,13 +19,10 @@ class LightningProject:
 
     def _get_checkpoint_path(self):
         checkpoint_path = os.path.join(self.config.checkpoint_dir, 'last.ckpt')
-        if os.path.exists(checkpoint_path) and self.config.resume:
-            return checkpoint_path
-        else:
-            return None
+        return checkpoint_path if os.path.exists(checkpoint_path) else None
 
     def train(self):
-        if self.checkpoint_path is not None:
+        if self.checkpoint_path is not None and self.config.resume:
             self.trainer.fit(self.model_module, self.data_module, ckpt_path=self.checkpoint_path)
         else:
             self.trainer.fit(self.model_module, self.data_module)
@@ -36,9 +33,10 @@ class LightningProject:
         else:
             self.trainer.validate(self.model_module, self.data_module)
 
-    def predict(self, inputs):
-        if self.checkpoint_path is not None:
-            self.trainer.predict(self.model_module, self.data_module, inputs, ckpt_path=self.checkpoint_path)
+    def predict(self):
+        if self.checkpoint_path is None:
+            raise ValueError("Checkpoint path is not set")
+        self.trainer.predict(self.model_module, self.data_module, ckpt_path=self.checkpoint_path)
 
     def export(self, format: str):
         pass
