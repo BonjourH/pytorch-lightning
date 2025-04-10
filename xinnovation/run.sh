@@ -7,8 +7,8 @@ config_file=${1:-"./xinnovation/examples/detector4D/sparse4dv3_temporal_base.py"
 mode=${2:-"train"}
 delete_checkpoints=${3:-0}
 
-
-rm -rf ./xinnovation_visualize_intermediate_results
+rm -rf ./xinnovation_predict_results
+rm -rf ./xinnovation_validation_results
 if [ $delete_checkpoints -eq 1 ]; then
     rm -rf ./xinnovation_checkpoints
 fi

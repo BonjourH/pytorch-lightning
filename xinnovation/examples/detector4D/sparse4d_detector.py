@@ -67,6 +67,10 @@ class Sparse4DDetector(nn.Module):
         # Initialize weights
         self.init_weights()
 
+    def sequence_length(self) -> int:
+        """Get the sequence length of the detector."""
+        return self.mts_feature_aggregator.sequence_length
+
     def get_init_trajs(self, B: int) -> torch.Tensor:
         return self.init_trajs.repeat(B, 1, 1)
 

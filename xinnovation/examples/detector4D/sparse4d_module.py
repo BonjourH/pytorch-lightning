@@ -229,7 +229,7 @@ class Sparse4DModule(LightningDetector):
         
         print(f"Matching visualization completed. Results saved to {vis_dir}")
 
-    def _generate_pred_trajs_video(self):
+    def _generate_validation_trajs_video(self):
         """Generate the video of the predicted trajectories."""
         if not self.debug_config.visualize_validation_results:
             return
@@ -389,7 +389,7 @@ class Sparse4DModule(LightningDetector):
     def on_train_end(self):
         """On train end, visualize the matching history."""
         if self.global_rank == 0:
-            self._generate_pred_trajs_video()
+            self._generate_validation_trajs_video()
             self._generate_matched_trajs_video()
             self._visualize_matching_results()
         
@@ -596,29 +596,133 @@ class Sparse4DModule(LightningDetector):
         """Test step."""
         return self.validation_step(batch, batch_idx)
     
+    def on_predict_start(self):
+        """On predict start."""
+        print("On predict start")
+        # save config file
+        os.makedirs(self.debug_config.predict_dir, exist_ok=True)
+        config_path = os.path.join(self.debug_config.predict_dir, "predict_config.json")
+        with open(config_path, 'w') as f:
+            json.dump(self.hparams, f, indent=2)
+    
+    def _save_pred_trajs_images(self, batch: Dict, batch_idx: int, outputs: List[torch.Tensor]):
+        """Save predicted trajectories images."""
+        step_str = f"{batch_idx:05d}"
+        # 1. read images
+        imgs_dict = TrainingSample.read_seqeuntial_images_to_tensor(batch['image_paths'], self.device)
+
+        # 2. render pred trajs
+        num_decoder_layers = len(outputs)
+        layer_colors = plt.cm.rainbow(np.linspace(0, 1, num_decoder_layers))  # 6 layers
+        layer_colors = (layer_colors[:, :3] * 255).astype(np.int32)  # Convert to RGB 0-255 format
+
+        for layer_idx in range(num_decoder_layers):
+            imgs_copy = imgs_dict.copy()
+            trajs = outputs[layer_idx]
+            imgs_copy, concat_imgs = self._render_trajs_on_imgs(trajs, 
+                                                    trajs[..., TrajParamIndex.HAS_OBJECT].sigmoid(),
+                                                    batch['camera_ids'],
+                                                    batch['calibrations'],
+                                                    batch['ego_states'], 
+                                                    imgs_copy,
+                                                    color=torch.tensor(layer_colors[layer_idx].tolist(), dtype=torch.float32))
+            
+            # 3. save images
+            save_dir = os.path.join(self.debug_config.predict_dir, "pred_trajs")
+            os.makedirs(save_dir, exist_ok=True)
+            height, width = 540, 960 * self.detector.sequence_length()
+            img_list = []
+            for camera_id in concat_imgs.keys():
+                # Add color indicator in the corner
+                img = concat_imgs[camera_id]
+                color_box = np.zeros((30, 30, 3), dtype=np.uint8)
+                color_box[:] = layer_colors[layer_idx]
+                img[10:40, 10:40] = color_box
+                cv2.putText(img, f"Layer {layer_idx}", (img.shape[1] // 2 - 100, 30), 
+                          cv2.FONT_HERSHEY_SIMPLEX, 1, layer_colors[layer_idx].tolist(), 2)
+                img = cv2.resize(img, (width, height))
+                img_list.append(img)
+            img_list = np.vstack(img_list)
+            img_list = cv2.cvtColor(img_list, cv2.COLOR_RGB2BGR)
+            img_name = f'predict_{step_str}_layer_{layer_idx}.png'
+            cv2.imwrite(os.path.join(save_dir, img_name), img_list)
+    
+    def _generate_predict_trajs_video(self):
+        """Generate predicted trajectories video."""
+        save_dir = os.path.join(self.debug_config.predict_dir, "pred_trajs")
+        if not os.path.exists(save_dir):
+            print("No prediction images found")
+            return
+            
+        # Create temporary directory for renamed frames
+        temp_dir = os.path.join(save_dir, "temp_frames")
+        os.makedirs(temp_dir, exist_ok=True)
+        
+        try:
+            # Get all prediction images and sort them
+            img_files = [f for f in os.listdir(save_dir) if f.endswith('.png') and not f.startswith('frame_')]
+            img_files.sort()
+            
+            # 1. Generate combined video (all layers)
+            print("Generating combined video of all layers...")
+            for i, img_file in enumerate(img_files):
+                src_path = os.path.join(save_dir, img_file)
+                dst_path = os.path.join(temp_dir, f"frame_{i:04d}.png")
+                shutil.copy2(src_path, dst_path)
+            
+            video_name = os.path.join(self.debug_config.predict_dir, "predict_trajs_combined.mp4")
+            ffmpeg_cmd = f"ffmpeg -y -framerate 10 -i {temp_dir}/frame_%04d.png -c:v libx264 -pix_fmt yuv420p {video_name}"
+            os.system(ffmpeg_cmd)
+            print(f"Generated combined video: {video_name}")
+            
+            # Clean up temp directory for next use
+            for f in os.listdir(temp_dir):
+                os.remove(os.path.join(temp_dir, f))
+            
+            # 2. Generate individual videos for each layer
+            num_layers = len(self.detector.decoder_layers)
+            for layer_idx in range(num_layers):
+                print(f"Generating video for layer {layer_idx}...")
+                layer_files = [f for f in img_files if f"layer_{layer_idx}" in f]
+                layer_files.sort()
+                
+                for i, img_file in enumerate(layer_files):
+                    src_path = os.path.join(save_dir, img_file)
+                    dst_path = os.path.join(temp_dir, f"frame_{i:04d}.png")
+                    shutil.copy2(src_path, dst_path)
+                
+                layer_video_name = os.path.join(self.debug_config.predict_dir, f"predict_trajs_layer_{layer_idx}.mp4")
+                ffmpeg_cmd = f"ffmpeg -y -framerate 10 -i {temp_dir}/frame_%04d.png -c:v libx264 -pix_fmt yuv420p {layer_video_name}"
+                os.system(ffmpeg_cmd)
+                print(f"Generated video for layer {layer_idx}: {layer_video_name}")
+                
+                # Clean up temp directory for next layer
+                for f in os.listdir(temp_dir):
+                    os.remove(os.path.join(temp_dir, f))
+            
+        finally:
+            # Clean up temporary directory
+            if os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir)
+    
     def predict_step(self, batch: Dict, batch_idx: int, dataloader_idx: int = 0) -> Dict:
         """Prediction step."""
         outputs, _, _ = self(batch)
         self.predict_step_outputs.append(outputs)
+
+        # visualize pred trajs
+        if self.debug_config.render_pred_trajs:
+            self._save_pred_trajs_images(batch, batch_idx, outputs)
         return outputs
     
     def on_predict_epoch_end(self):
         """On predict epoch end."""
         print("On predict epoch end")
         
-    def on_predict_start(self):
-        """On predict start."""
-        print("On predict start")
-        # save config file
-        os.makedirs(self.debug_config.log_dir, exist_ok=True)
-        os.makedirs(self.debug_config.predict_dir, exist_ok=True)
-        config_path = os.path.join(self.debug_config.predict_dir, "predict_config.json")
-        with open(config_path, 'w') as f:
-            json.dump(self.hparams, f, indent=2)
-        
     def on_predict_end(self):
         """On predict end."""
         print("On predict end")
+        self._generate_predict_trajs_video()
         
     def _compute_metrics(self, predictions: List[torch.Tensor], targets: List[torch.Tensor]) -> Dict:
         """Compute evaluation metrics."""
