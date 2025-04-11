@@ -5,7 +5,7 @@ from xinnovation.examples.detector4D.sparse4d_dataset import CameraGroupConfig
 
 # ============================== 1. Base Config ==============================
 query_dim = 256
-seq_length = 6
+seq_length = 5
 dropout = 0.1
 num_groups = 8
 num_decoder = 6
@@ -294,6 +294,8 @@ lightning_module = dict(
             reduction="mean",
             loss_weight=1.0
         ),
+        ct_cost_thresh=10,
+        ct_cls_loss_weight=0.1,
     ),
     debug_config = dict(
         visualize_validation_results=True,

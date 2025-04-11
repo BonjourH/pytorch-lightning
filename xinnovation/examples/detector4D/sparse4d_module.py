@@ -519,7 +519,7 @@ class Sparse4DModule(LightningDetector):
             self.visualize_init_trajs(batch)
             exit()
         # Forward pass
-        outputs, c_outputs, quality = self(batch)
+        outputs, _, c_outputs, _ = self(batch)
         loss_dict = self.criterion(batch['trajs'], outputs, c_outputs)
         
         # # Log losses
@@ -531,7 +531,7 @@ class Sparse4DModule(LightningDetector):
     def validation_step(self, batch: Dict, batch_idx: int) -> Dict:
         """Validation step."""
         # Forward pass
-        outputs, c_outputs, quality = self(batch)
+        outputs, _, c_outputs, _ = self(batch)
         # Compute loss
         loss_dict = self.criterion(batch['trajs'], outputs, c_outputs, batch_idx, "val") # don't save matching history for validation
 
@@ -713,7 +713,7 @@ class Sparse4DModule(LightningDetector):
     
     def predict_step(self, batch: Dict, batch_idx: int, dataloader_idx: int = 0) -> Dict:
         """Prediction step."""
-        outputs, _, _ = self(batch)
+        outputs, _, c_outputs, _ = self(batch)
         self.predict_step_outputs.append(outputs)
 
         # visualize pred trajs

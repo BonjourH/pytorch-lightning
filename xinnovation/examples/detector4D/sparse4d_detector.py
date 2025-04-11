@@ -9,6 +9,8 @@ from xinnovation.src.utils.debug_utils import check_nan_or_inf
 
 __all__ = ["Sparse4DDetector"]
 
+check_abnormal = False
+
 @DETECTORS.register_module()
 class Sparse4DDetector(nn.Module):
     def __init__(self, anchor_encoder: Dict,
@@ -126,8 +128,6 @@ class Sparse4DDetector(nn.Module):
             List[torch.Tensor], trajs at each layer
             List[torch.Tensor], quality at each layer
         """
-
-        check_abnormal = False
         
         # Extract features from each camera
         all_features_dict: Dict[SourceCameraId, List[torch.Tensor]] = {}  
@@ -150,17 +150,48 @@ class Sparse4DDetector(nn.Module):
                 all_features_dict[camera_id] = [feat[:, idx] for feat in feats] # (B * T, C, H // down_scale_i, W // down_scale_i)
         
         # Decoder part
-        
-        trajs_prediction = []
-        trajs_prediction_ct = [] # cross-attention branch of DAC-DETR
-        quality_prediction = []
-
-        trajs = self.init_trajs.repeat(B, 1, 1)
-        check_nan_or_inf(trajs, active=check_abnormal, name="trajs")
+        init_trajs = self.init_trajs.repeat(B, 1, 1)
+        check_nan_or_inf(init_trajs, active=check_abnormal, name="init_trajs")
 
         tgts = self.query_embed.repeat(B, 1, 1)
-        pos_embeds = self.anchor_encoder(trajs)
-        check_nan_or_inf(pos_embeds, active=check_abnormal, name="pos_embeds")
+        pos_embeds = self.anchor_encoder(init_trajs)
+        
+        trajs, quality = self._decode_trajs(batch, init_trajs, pos_embeds, tgts, all_features_dict, enable_self_attn=True)
+        ct_trajs, ct_quality = self._decode_trajs(batch, init_trajs, pos_embeds, tgts, all_features_dict, enable_self_attn=False)  # cross-attention branch of DAC-DETR
+        
+        # Clear intermediate tensors to save memory
+        del all_features_dict
+        torch.cuda.empty_cache()
+        
+        return trajs, quality, ct_trajs, ct_quality
+    
+    def _decode_trajs(self, 
+                      batch: Dict,
+                      trajs: torch.Tensor,
+                      trajs_pos_embeds: torch.Tensor,
+                      tgts: torch.Tensor, 
+                      all_features_dict: Dict[SourceCameraId, List[torch.Tensor]], 
+                      enable_self_attn: bool) -> List[Any]:
+        """
+        Decode the trajectories from the transformer decoder.
+        
+        Args:
+            batch: Batch data,
+            trajs: Trajectories,
+            trajs_pos_embeds: Positional embeddings of trajectories,
+            tgts: Target embeddings,
+            all_features_dict: Features from all cameras,
+            enable_self_attn: Whether to enable self-attention,
+            
+        Returns:
+            predictions: List[torch.Tensor], predictions of trajectories
+            quality_predictions: List[torch.Tensor], predictions of quality
+        """
+        
+        predictions = []
+        quality_predictions = []
+        tgts = self.query_embed.repeat(trajs.shape[0], 1, 1)
+        
         for layer_idx in range(len(self.decoder_op_orders)):
             layer_ops = self.decoder_op_orders[layer_idx]
             layers = self.decoder_layers[layer_idx]
@@ -174,28 +205,23 @@ class Sparse4DDetector(nn.Module):
                                                        all_features_dict, 
                                                        batch['calibrations'], 
                                                        batch['ego_states'], 
-                                                       pos_embeds)
+                                                       trajs_pos_embeds)
                     check_nan_or_inf(pixels, active=check_abnormal, name="pixels")
                     check_nan_or_inf(tgts, active=check_abnormal, name="tgts")
                 elif op == "temp_attention":
                     raise NotImplementedError("Temp attention is not implemented")
                     # tgt = layer(tgts, pos_embeds, histories_tgts, histories_pos_embeds)
-                elif op == "self_attention":
-                    tgts = layer(tgts, pos_embeds)
+                elif op == "self_attention" and enable_self_attn:
+                    tgts = layer(tgts, trajs_pos_embeds)
                     check_nan_or_inf(tgts, active=check_abnormal, name="tgts")
                 elif op == "ffn":
                     tgts = layer(tgts)
                     check_nan_or_inf(tgts, active=check_abnormal, name="tgts")
                 elif op == "refine":
-                    trajs, quality = layer(tgts, pos_embeds, trajs)
+                    trajs, quality = layer(tgts, trajs_pos_embeds, trajs)
                     check_nan_or_inf(trajs, active=check_abnormal, name="trajs")
                     assert trajs is not None
-                    trajs_prediction.append(trajs)
-                    quality_prediction.append(quality)
+                    predictions.append(trajs)
+                    quality_predictions.append(quality)
             # order: temp_attn => self_attn => mts_feature_aggregator => ffn => refine
-                    
-        # Clear intermediate tensors to save memory
-        del all_features_dict
-        torch.cuda.empty_cache()
-        
-        return trajs_prediction, trajs_prediction_ct, quality_prediction
+        return predictions, quality_predictions

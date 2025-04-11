@@ -27,6 +27,8 @@ class Sparse4DLossWithDAC(nn.Module):
                     xrel_range: List[float],
                     yrel_range: List[float],
                     use_normalized_motion_cost: bool = False,
+                    ct_cost_thresh: float = 10,
+                    ct_cls_loss_weight: float = 0.1,
                     **kwargs):
         super().__init__()
         self.xrel_range = xrel_range
@@ -42,6 +44,8 @@ class Sparse4DLossWithDAC(nn.Module):
         self.regression_loss = LOSSES.build(regression_loss)
 
         self.use_normalized_motion_cost = use_normalized_motion_cost
+        self.ct_cost_thresh = ct_cost_thresh
+        self.ct_cls_loss_weight = ct_cls_loss_weight
         self.epoch = 0
 
     def update_epoch(self, epoch: int):
@@ -57,6 +61,55 @@ class Sparse4DLossWithDAC(nn.Module):
             return []
         return self.matching_history[layer_idx][-1]
     
+    @torch.no_grad()
+    def _compute_one_to_n_match_results(self, gt_trajs: torch.Tensor, pred_trajs: torch.Tensor, valid_gt_nbs: torch.Tensor) -> torch.Tensor:
+        """
+        Compute the matching cost matrix between ground truth trajectories and predicted trajectories.
+        Args:
+            gt_trajs: Ground truth trajectories [B, M, TrajParamIndex.END_OF_INDEX]
+            pred_trajs: Predicted trajectories [B, N, TrajParamIndex.END_OF_INDEX]
+            valid_gt_nbs: Valid ground truth number of each batch [B]
+        Returns:
+            matched_pred: Tensor[B_matched, pred_idx]
+            matched_gt:   Tensor[B_matched, gt_idx]
+            unmatched_pred: Tensor[B_unmatched, pred_idx]
+        """
+        B, M, N = gt_trajs.shape[0], gt_trajs.shape[1], pred_trajs.shape[1]
+        # 1. calculate the cost matrix
+        # 1.1 calculate the regression loss, of shape [B, M, N]
+        x_cost = torch.cdist(gt_trajs[:, :, TrajParamIndex.X:TrajParamIndex.X+1], pred_trajs[:, :, TrajParamIndex.X:TrajParamIndex.X+1], p=1)
+        y_cost = torch.cdist(gt_trajs[:, :, TrajParamIndex.Y:TrajParamIndex.Y+1], pred_trajs[:, :, TrajParamIndex.Y:TrajParamIndex.Y+1], p=1)
+        z_cost = torch.cdist(gt_trajs[:, :, TrajParamIndex.Z:TrajParamIndex.Z+1], pred_trajs[:, :, TrajParamIndex.Z:TrajParamIndex.Z+1], p=1)
+        dimension_cost = torch.cdist(gt_trajs[:, :, TrajParamIndex.LENGTH:TrajParamIndex.HEIGHT+1], 
+                                     pred_trajs[:, :, TrajParamIndex.LENGTH:TrajParamIndex.HEIGHT+1], p=1)
+        cost_matrix = x_cost + y_cost + z_cost + dimension_cost
+        # 2. set the cost of non-gt to a large value by using valid_gt_nbs
+        b_indices = torch.repeat_interleave(torch.arange(B).to(valid_gt_nbs.device), M - valid_gt_nbs)  # (M,)
+        m_indices = torch.cat([torch.arange(n, M) for n in valid_gt_nbs]).to(valid_gt_nbs.device)  # (M,)
+        cost_matrix[b_indices, m_indices] = 1e6
+        # 3. cost_matrix: (B, M, N)，M: 每个 batch 的 gt 数量最大值，N: 每个 batch 的 query 数量
+        # 我们现在要求：每个 query（即 dim=-1 的每个位置）在 M 个 gt 中找到最小 cost 的那个
+        # min_cost: 每个 query 最小 cost 值
+        # matched_gt_idx: 每个 query 对应的 gt 索引（在 M 中）
+
+        # 取最小 cost 对应的 gt 索引
+        min_cost, matched_gt_idx = torch.min(cost_matrix, dim=1)  # (B, N)
+         # 2. 根据 cost 阈值过滤
+        valid_mask = min_cost < self.ct_cost_thresh  # (B, N_pred)
+
+        # 3. 获取 matched 的 batch 和 pred 索引
+        matched_batch_idx, matched_pred_idx = torch.where(valid_mask)  # (M,)
+        matched_gt_idx = matched_gt_idx[matched_batch_idx, matched_pred_idx]  # (M,)
+        
+        matched_pred = torch.stack([matched_batch_idx, matched_pred_idx], dim=0)  # (2, M)
+        matched_gt = torch.stack([matched_batch_idx, matched_gt_idx], dim=0)      # (2, M)
+
+        # 4. 获取 unmatched 的 prediction 索引
+        unmatched_batch_idx, unmatched_pred_idx = torch.where(~valid_mask)
+        unmatched_pred = torch.stack([unmatched_batch_idx, unmatched_pred_idx], dim=0)  # (2, M')
+
+        return matched_pred, matched_gt, unmatched_pred
+        
     @torch.no_grad()
     def _compute_hungarian_match_results(self, gt_trajs: torch.Tensor, pred_trajs: torch.Tensor, valid_gt_nbs: torch.Tensor) -> torch.Tensor:
         """
@@ -194,10 +247,22 @@ class Sparse4DLossWithDAC(nn.Module):
             
         # 2. Add loss of cross-attention decoder
         if c_outputs is not None:
-            for layer_idx, pred_trajs in enumerate(c_outputs[1:]):
-                # TODO: calculate the loss
-                pass
-        
+            for layer_idx, pred_trajs in enumerate(c_outputs):
+                weight = self.layer_loss_weights[layer_idx]
+                matched_preds_idx, matched_gt_idx, unmatched_preds_idx = self._compute_one_to_n_match_results(gt_trajs, pred_trajs, valid_gt_nbs)
+                matched_preds = pred_trajs[matched_preds_idx[0], matched_preds_idx[1]] # [num_matched_preds, TrajParamIndex.END_OF_INDEX]
+                matched_gts = gt_trajs[matched_gt_idx[0], matched_gt_idx[1]] # [num_matched_preds, TrajParamIndex.END_OF_INDEX]
+                unmatched_preds = pred_trajs[unmatched_preds_idx[0], unmatched_preds_idx[1]] # [num_unmatched_preds, TrajParamIndex.END_OF_INDEX]
+                # 2.1 calculate the classification loss for matched preds
+                losses[f'layer_{layer_idx}_cls_loss_ct'] = self.has_object_loss(matched_preds[:, TrajParamIndex.HAS_OBJECT],
+                                                                            matched_gts[:, TrajParamIndex.HAS_OBJECT]) * weight * self.ct_cls_loss_weight
+                # 2.2 calculate the regression loss for matched preds
+                losses[f'layer_{layer_idx}_reg_loss_ct'] = self.regression_loss(matched_preds[:, TrajParamIndex.X:TrajParamIndex.HEIGHT + 1],
+                                                                            matched_gts[:, TrajParamIndex.X:TrajParamIndex.HEIGHT + 1]) * weight
+                # 2.3 calculate the classification loss for unmatched preds
+                labels = torch.zeros_like(unmatched_preds[:, TrajParamIndex.HAS_OBJECT])
+                losses[f'layer_{layer_idx}_fp_cls_loss_ct'] = self.has_object_loss(unmatched_preds[:, TrajParamIndex.HAS_OBJECT],
+                                                                            labels) * weight * self.ct_cls_loss_weight
         losses['loss'] = sum(losses.values())
         return losses
 
