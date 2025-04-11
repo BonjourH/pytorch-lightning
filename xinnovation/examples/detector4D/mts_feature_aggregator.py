@@ -29,6 +29,7 @@ class MultiviewTemporalSpatialFeatureAggregator(nn.Module):
                  camera_nb: int = 7,
                  fpn_levels: int = 3,
                  residual_mode: str = "cat",
+                 use_log_dimension: bool = False,
                  **kwargs):
         """Initialize the feature sampler.
         
@@ -44,7 +45,7 @@ class MultiviewTemporalSpatialFeatureAggregator(nn.Module):
         self.residual_mode = residual_mode
         self.sequence_length = sequence_length
         self.temporal_weight_decay = temporal_weight_decay
-        
+        self.use_log_dimension = use_log_dimension
         # Keypoints configuration
         self.register_buffer('unit_points', generate_bbox_corners_points(with_origin=True)) # [3, 9]
         if num_learnable_points > 0 :
@@ -145,7 +146,7 @@ class MultiviewTemporalSpatialFeatureAggregator(nn.Module):
         check_nan_or_inf(kpts_all, active=check_abnormal, name="kpts_all")
 
         # 2. Project the points to the image plane
-        pixels = project_points_to_image(trajs, calibrations, ego_states, kpts_all, normalize=True)
+        pixels = project_points_to_image(trajs, calibrations, ego_states, kpts_all, normalize=True, use_log_dimension=self.use_log_dimension)
         check_nan_or_inf(pixels, active=check_abnormal, name="pixels")
         return pixels
 

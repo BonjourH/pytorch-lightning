@@ -66,7 +66,12 @@ class Sparse4DDetector(nn.Module):
             
         # Initialize weights
         self.init_weights()
+        
+    @property
+    def use_log_dimension(self) -> bool:
+        return self.mts_feature_aggregator.use_log_dimension
 
+    @property
     def sequence_length(self) -> int:
         """Get the sequence length of the detector."""
         return self.mts_feature_aggregator.sequence_length

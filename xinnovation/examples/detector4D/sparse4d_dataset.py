@@ -106,7 +106,8 @@ class Sparse4DMultiFrameDataset(Dataset):
                        xrel_range: List[float],
                        yrel_range: List[float],
                        sliding_window_size: int,
-                       sliding_window_stride: int):
+                       sliding_window_stride: int,
+                       use_log_dimension: bool = False):
         self.clip_dirs = clip_dirs
         self.camera_groups = camera_groups
         self.camera_ids = [cam_id for group in camera_groups for cam_id in group.camera_ids]
@@ -115,6 +116,7 @@ class Sparse4DMultiFrameDataset(Dataset):
         self.sliding_window_stride = sliding_window_stride
         self.xrel_range = xrel_range
         self.yrel_range = yrel_range
+        self.use_log_dimension = use_log_dimension
         self.samples = self._build_samples()
         
         print(f"Total {len(self.samples)} samples")
@@ -325,9 +327,14 @@ class Sparse4DMultiFrameDataset(Dataset):
                             yaw = obj_data['yaw']
                             traj[TrajParamIndex.COS_YAW] = np.cos(yaw)
                             traj[TrajParamIndex.SIN_YAW] = np.sin(yaw)
-                            traj[TrajParamIndex.LENGTH] = np.log(max(obj_data.get('length', 1e-6), 1e-6))
-                            traj[TrajParamIndex.WIDTH] = np.log(max(obj_data.get('width', 1e-6), 1e-6))
-                            traj[TrajParamIndex.HEIGHT] = np.log(max(obj_data.get('height', 1e-6), 1e-6))
+                            if self.use_log_dimension:
+                                traj[TrajParamIndex.LENGTH] = np.log(obj_data['length'])
+                                traj[TrajParamIndex.WIDTH] = np.log(obj_data['width'])
+                                traj[TrajParamIndex.HEIGHT] = np.log(obj_data['height'])
+                            else:
+                                traj[TrajParamIndex.LENGTH] = obj_data['length']
+                                traj[TrajParamIndex.WIDTH] = obj_data['width']
+                                traj[TrajParamIndex.HEIGHT] = obj_data['height']
                             # object attributes
                             traj[TrajParamIndex.HAS_OBJECT] = 1.0
                             traj[TrajParamIndex.STATIC] = obj_data.get('static', 0.0)
@@ -444,7 +451,8 @@ if __name__ == '__main__':
     dataset = Sparse4DMultiFrameDataset(
         clip_dirs=clip_dirs,
         sequence_length=10,
-        camera_groups=[CameraGroupConfig.front_stereo_camera_group(), CameraGroupConfig.short_focal_length_camera_group(), CameraGroupConfig.rear_camera_group()]
+        camera_groups=[CameraGroupConfig.front_stereo_camera_group(), CameraGroupConfig.short_focal_length_camera_group(), CameraGroupConfig.rear_camera_group()],
+        use_log_dimension=False
     )
 
     print("\n=== Testing Data Loading ===")

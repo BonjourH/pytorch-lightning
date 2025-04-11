@@ -25,12 +25,14 @@ class AnchorEncoder(nn.Module):
                  orientation_embed_dim: int,
                  vel_embed_dim: int,
                  embed_dim: int,
+                 use_log_dimension: bool,
                  anchor_generator_config: Dict,
                  ):
         super().__init__()
         self.embed_dim = pos_embed_dim + dim_embed_dim + orientation_embed_dim + vel_embed_dim
         assert self.embed_dim == embed_dim, f"embed_dim {self.embed_dim} != {embed_dim}"
 
+        self.use_log_dimension = use_log_dimension
         self.anchor_generator = ANCHOR_GENERATOR.build(anchor_generator_config)
         self._generate_init_trajs()
         self.num_queries = self.anchor_generator.get_anchor_num()
@@ -66,7 +68,10 @@ class AnchorEncoder(nn.Module):
         # self.init_trajs = torch.zeros(self.anchors.shape[0], TrajParamIndex.END_OF_INDEX)
         self.init_trajs = torch.zeros(self.anchors.shape[0], TrajParamIndex.END_OF_INDEX)
         self.init_trajs[:, TrajParamIndex.X:TrajParamIndex.Z + 1] = self.anchors[:, :3]
-        self.init_trajs[:, TrajParamIndex.LENGTH:TrajParamIndex.HEIGHT + 1] = self.anchors[:, 3:6].log()
+        if self.use_log_dimension:
+            self.init_trajs[:, TrajParamIndex.LENGTH:TrajParamIndex.HEIGHT + 1] = self.anchors[:, 3:6].log()
+        else:
+            self.init_trajs[:, TrajParamIndex.LENGTH:TrajParamIndex.HEIGHT + 1] = self.anchors[:, 3:6]
         self.init_trajs[:, TrajParamIndex.X] = self.init_trajs[:, TrajParamIndex.X] + 4.5 # front bumper to imu
         self.init_trajs[:, TrajParamIndex.VX] = 23.0
         self.init_trajs[:, TrajParamIndex.COS_YAW] = 1.0
@@ -112,11 +117,15 @@ class TrajectoryRefiner(nn.Module):
                        hidden_dim: int,
                        motion_range: Dict,
                        normalize_yaw: bool = False,
-                       with_quality_estimation: bool = False):
+                       with_quality_estimation: bool = False,
+                       use_log_dimension: bool = False,
+                       detr3d_style_decoding_xyz: bool = False):
         super().__init__()
         self.query_dim = query_dim
         self.normalize_yaw = normalize_yaw
         self.with_quality_estimation = with_quality_estimation
+        self.use_log_dimension = use_log_dimension
+        self.detr3d_style_decoding_xyz = detr3d_style_decoding_xyz
         self._register_motion_range(motion_range)
 
         # regression part
@@ -151,8 +160,14 @@ class TrajectoryRefiner(nn.Module):
         motion_ranges = motion_maxs - motion_mins
         self.register_buffer('motion_mins', motion_mins)
         self.register_buffer('motion_ranges', motion_ranges)
-        self.register_buffer('log_dimension_mins', torch.log(torch.tensor([mr['length'][0], mr['width'][0], mr['height'][0]])))
-        self.register_buffer('log_dimension_maxs', torch.log(torch.tensor([mr['length'][1], mr['width'][1], mr['height'][1]])))
+        max_dimension = torch.tensor([mr['length'][1], mr['width'][1], mr['height'][1]])
+        min_dimension = torch.tensor([mr['length'][0], mr['width'][0], mr['height'][0]])
+        if self.use_log_dimension:
+            self.register_buffer('log_dimension_mins', torch.log(min_dimension))
+            self.register_buffer('log_dimension_maxs', torch.log(max_dimension))
+        else:
+            self.register_buffer('dimension_mins', min_dimension)
+            self.register_buffer('dimension_maxs', max_dimension)
         
     def init_weights(self):
         """Initialize the weights of the network."""
@@ -163,9 +178,14 @@ class TrajectoryRefiner(nn.Module):
                 
     def _clamp_trajs(self, trajs: torch.Tensor) -> torch.Tensor:
         clamp_trajs = trajs.clone()
-        clamp_trajs[..., TrajParamIndex.LENGTH] = torch.clamp(trajs[..., TrajParamIndex.LENGTH], min=self.log_dimension_mins[0], max=self.log_dimension_maxs[0])
-        clamp_trajs[..., TrajParamIndex.WIDTH] = torch.clamp(trajs[..., TrajParamIndex.WIDTH], min=self.log_dimension_mins[1], max=self.log_dimension_maxs[1])
-        clamp_trajs[..., TrajParamIndex.HEIGHT] = torch.clamp(trajs[..., TrajParamIndex.HEIGHT], min=self.log_dimension_mins[2], max=self.log_dimension_maxs[2])
+        if self.use_log_dimension:
+            clamp_trajs[..., TrajParamIndex.LENGTH] = torch.clamp(trajs[..., TrajParamIndex.LENGTH], min=self.log_dimension_mins[0], max=self.log_dimension_maxs[0])
+            clamp_trajs[..., TrajParamIndex.WIDTH] = torch.clamp(trajs[..., TrajParamIndex.WIDTH], min=self.log_dimension_mins[1], max=self.log_dimension_maxs[1])
+            clamp_trajs[..., TrajParamIndex.HEIGHT] = torch.clamp(trajs[..., TrajParamIndex.HEIGHT], min=self.log_dimension_mins[2], max=self.log_dimension_maxs[2])
+        else:
+            clamp_trajs[..., TrajParamIndex.LENGTH] = torch.clamp(trajs[..., TrajParamIndex.LENGTH], min=self.dimension_mins[0], max=self.dimension_maxs[0])
+            clamp_trajs[..., TrajParamIndex.WIDTH] = torch.clamp(trajs[..., TrajParamIndex.WIDTH], min=self.dimension_mins[1], max=self.dimension_maxs[1])
+            clamp_trajs[..., TrajParamIndex.HEIGHT] = torch.clamp(trajs[..., TrajParamIndex.HEIGHT], min=self.dimension_mins[2], max=self.dimension_maxs[2])
         return clamp_trajs
 
     def forward(self, content_query: torch.Tensor, 
@@ -192,11 +212,14 @@ class TrajectoryRefiner(nn.Module):
         
         # 1. Do refinement for trajs regression part
         # Update the motion x, y, z, vx, vy, ax, ay
-        reference = (refined_trajs[..., :TrajParamIndex.AY + 1] - self.motion_mins) / (self.motion_ranges)
-        reference = inverse_sigmoid(reference)
-        reg_out[..., :TrajParamIndex.AY + 1] += reference
-        reg_out[..., :TrajParamIndex.AY + 1] = reg_out[..., :TrajParamIndex.AY + 1].sigmoid()
-        refined_trajs[..., :TrajParamIndex.AY + 1] = reg_out[..., :TrajParamIndex.AY + 1] * self.motion_ranges + self.motion_mins
+        if self.detr3d_style_decoding_xyz:
+            reference = (refined_trajs[..., :TrajParamIndex.AY + 1] - self.motion_mins) / (self.motion_ranges)
+            reference = inverse_sigmoid(reference)
+            reg_out[..., :TrajParamIndex.AY + 1] += reference
+            reg_out[..., :TrajParamIndex.AY + 1] = reg_out[..., :TrajParamIndex.AY + 1].sigmoid()
+            refined_trajs[..., :TrajParamIndex.AY + 1] = reg_out[..., :TrajParamIndex.AY + 1] * self.motion_ranges + self.motion_mins
+        else:
+            refined_trajs[..., :TrajParamIndex.AY + 1] += reg_out[..., :TrajParamIndex.AY + 1]
         
         # Update the rotation
         if self.normalize_yaw:

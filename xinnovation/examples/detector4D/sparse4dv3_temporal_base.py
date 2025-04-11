@@ -25,6 +25,8 @@ batch_size = 1
 devices = [0]
 xrel_range = [-60.0, 125.0]
 yrel_range = [-10.0, 10.0]
+use_log_dimension = False
+detr3d_style_decoding_xyz = True
 # devices = [0]
 
 # ============================== 2. Trainer Config ==============================
@@ -101,7 +103,8 @@ lightning_data_module = dict(
     pin_memory=True,
     xrel_range=xrel_range,
     yrel_range=yrel_range,
-    camera_groups=[CameraGroupConfig.front_stereo_camera_group(), CameraGroupConfig.short_focal_length_camera_group(), CameraGroupConfig.rear_camera_group()]
+    camera_groups=[CameraGroupConfig.front_stereo_camera_group(), CameraGroupConfig.short_focal_length_camera_group(), CameraGroupConfig.rear_camera_group()],
+    use_log_dimension=use_log_dimension
 )
 
 
@@ -139,6 +142,7 @@ lightning_module = dict(
             orientation_embed_dim=32,
             vel_embed_dim=64,
             embed_dim=query_dim,
+            use_log_dimension=use_log_dimension,
             anchor_generator_config=dict(
                 type="Anchor3DGenerator",
                 front_type="div_x",
@@ -197,7 +201,8 @@ lightning_module = dict(
             temporal_weight_decay=4.0 * 4.0, # 4s gives exp(-3) weight
             camera_nb=7,
             fpn_levels=3,
-            residual_mode="cat"
+            residual_mode="cat",
+            use_log_dimension=use_log_dimension
         ),
         self_attention=dict(
             type="DecoupledMultiHeadAttention",
@@ -223,6 +228,9 @@ lightning_module = dict(
             query_dim=query_dim,
             hidden_dim=query_dim,
             with_quality_estimation=with_quality_estimation,
+            use_log_dimension=use_log_dimension,
+            detr3d_style_decoding_xyz=detr3d_style_decoding_xyz,
+            normalize_yaw=False,
             motion_range=dict(
                 x=xrel_range,
                 y=yrel_range,

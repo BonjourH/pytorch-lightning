@@ -66,7 +66,7 @@ class Sparse4DModule(LightningDetector):
         """
         B, T, _ = ego_states.shape
         
-        pixels = project_points_to_image(trajs, calibrations, ego_states, self.bbox_edge_points) # pixels: torch.Tensor[B*T, N, C, P, 2]
+        pixels = project_points_to_image(trajs, calibrations, ego_states, self.bbox_edge_points, use_log_dimension=self.detector.use_log_dimension) # pixels: torch.Tensor[B*T, N, C, P, 2]
         _, N, C, P, _ = pixels.shape
         pixels = pixels.view(B, T, N, C, P, 2)
         
