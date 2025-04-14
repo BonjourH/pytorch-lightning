@@ -23,6 +23,7 @@ class Sparse4DDetector(nn.Module):
                     refine: Dict,
                     temp_attention: Dict,
                     use_checkpoint: bool = False,
+                    use_same_mts_for_different_layers: bool = True,
                     **kwargs):
         super().__init__()
         self.camera_groups = camera_groups
@@ -39,19 +40,26 @@ class Sparse4DDetector(nn.Module):
         )
         
         # Create feature extractors for each camera group
+        
         self.feature_extractors = nn.ModuleDict({
             name: IMAGE_FEATURE_EXTRACTOR.build(cfg)
             for name, cfg in feature_extractors.items()
         })
         
         # build decoder layers
-        self.mts_feature_aggregator = build_from_cfg(mts_feature_aggregator, ATTENTION)
+        if use_same_mts_for_different_layers:
+            self.mts_feature_aggregator = build_from_cfg(mts_feature_aggregator, ATTENTION)
+            self.use_log_dimension = self.mts_feature_aggregator.use_log_dimension
+            self.sequence_length = self.mts_feature_aggregator.sequence_length
+        else:
+            self.mts_feature_aggregator = None
 
         self.decoder_layer_config_map = {
             "temp_attention": [temp_attention, ATTENTION],
             "self_attention": [self_attention, ATTENTION],
             "ffn": [ffn, FEEDFORWARD_NETWORK],
-            "refine": [refine, PLUGINS]
+            "refine": [refine, PLUGINS],
+            "mts_feature_aggregator": [mts_feature_aggregator, ATTENTION]
         }
 
         self.decoder_layers = nn.ModuleList()
@@ -59,8 +67,13 @@ class Sparse4DDetector(nn.Module):
             layer = nn.ModuleList()
             for op in layer_ops:
                 if op == "mts_feature_aggregator":
-                    layer.append(self.mts_feature_aggregator)
-                    # use the shared mts_feature_aggregator for all layers
+                    if self.mts_feature_aggregator is not None:
+                        # use the shared mts_feature_aggregator for all layers
+                        layer.append(self.mts_feature_aggregator)
+                    else:
+                        layer.append(build_from_cfg(mts_feature_aggregator, ATTENTION))
+                        self.use_log_dimension = layer[-1].use_log_dimension
+                        self.sequence_length = layer[-1].sequence_length
                 else:
                     cfg, registry = self.decoder_layer_config_map[op]
                     layer.append(build_from_cfg(cfg, registry))
@@ -68,15 +81,6 @@ class Sparse4DDetector(nn.Module):
             
         # Initialize weights
         self.init_weights()
-        
-    @property
-    def use_log_dimension(self) -> bool:
-        return self.mts_feature_aggregator.use_log_dimension
-
-    @property
-    def sequence_length(self) -> int:
-        """Get the sequence length of the detector."""
-        return self.mts_feature_aggregator.sequence_length
 
     def get_init_trajs(self, B: int) -> torch.Tensor:
         return self.init_trajs.repeat(B, 1, 1)
@@ -199,13 +203,13 @@ class Sparse4DDetector(nn.Module):
             for op_idx in range(len(layer_ops)):
                 op, layer = layer_ops[op_idx], layers[op_idx]
                 if op == "mts_feature_aggregator":
-                    pixels, tgts = self.mts_feature_aggregator(trajs, 
-                                                       batch['camera_ids'], 
-                                                       tgts, 
-                                                       all_features_dict, 
-                                                       batch['calibrations'], 
-                                                       batch['ego_states'], 
-                                                       trajs_pos_embeds)
+                    pixels, tgts = layer(trajs, 
+                                        batch['camera_ids'], 
+                                        tgts, 
+                                        all_features_dict, 
+                                        batch['calibrations'], 
+                                        batch['ego_states'], 
+                                        trajs_pos_embeds)
                     check_nan_or_inf(pixels, active=check_abnormal, name="pixels")
                     check_nan_or_inf(tgts, active=check_abnormal, name="tgts")
                 elif op == "temp_attention":
