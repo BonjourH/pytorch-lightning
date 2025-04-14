@@ -12,7 +12,7 @@ def parse_args():
     parser.add_argument('--checkpoint', type=str, help='Path to the checkpoint file')
     parser.add_argument('--gpu_ids', type=str, help='GPU IDs to use for training')
     parser.add_argument('--seed', type=int, default=42, help='Random seed')
-    parser.add_argument('--mode', type=str, default='train', help='[train, test, predict]')
+    parser.add_argument('--mode', type=str, default='train', help='[train, test, predict, export]')
     return parser.parse_args()
 
 
@@ -30,6 +30,8 @@ def main():
         project.test()
     elif args.mode == 'predict':
         project.predict()
+    elif args.mode == 'export':
+        project.export()
 
 if __name__ == '__main__':
     main()

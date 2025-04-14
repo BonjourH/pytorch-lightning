@@ -316,7 +316,23 @@ lightning_module = dict(
     ),
 )
 
-# ============================== 5. Evaluation Config ==============================
+# ============================== 5. Deploy Config ==============================
+deploy = dict(
+    type="Deployer",
+    onnx_converter_cfg=dict(
+        type="ONNXConverter",
+        opset_version=12,
+        dynamic_axes=dict(
+            input=dict(
+                start_axis=0,
+                end_axis=-1,
+                step_axis=1
+            )
+        )
+    )
+)
+
+# ============================== 6. Evaluation Config ==============================
 
 
 
